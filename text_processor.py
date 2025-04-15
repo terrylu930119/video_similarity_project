@@ -421,7 +421,6 @@ def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = N
                     beam_size=5,
                     fp16=gpu_manager.is_pytorch_cuda_available(),
                     verbose=False,
-                    initial_prompt="請仔細聆聽並轉錄這段音頻。注意保留說話者的語氣和情感，同時保持文本的自然流暢性。"
                 )
                 
                 transcript = result["text"].strip()
@@ -494,13 +493,73 @@ def compute_text_embedding(text: str) -> torch.Tensor:
         logger.error(f"計算文本嵌入向量時出錯: {str(e)}")
         return None
 
-def text_similarity(text1: str, text2: str) -> float:
-    """計算文字相似度"""
+def is_meaningful_text(text: str, min_length: int = 50, min_unique_ratio: float = 0.3) -> bool:
+    """
+    判斷文本是否有意義
+    
+    參數:
+        text: 要分析的文本
+        min_length: 最小文本長度
+        min_unique_ratio: 最小唯一字符比例
+    
+    返回:
+        bool: 文本是否有意義
+    """
+    try:
+        if not text or len(text) < min_length:
+            logger.warning(f"文本長度過短 ({len(text)} 字符)")
+            return False
+            
+        # 計算唯一字符比例
+        total_chars = len(text)
+        unique_chars = len(set(text))
+        unique_ratio = unique_chars / total_chars
+        
+        # 檢查重複模式
+        has_repetitive_pattern = bool(re.search(r'(.{3,}?)\1{2,}', text))
+        
+        # 檢查標點符號比例
+        punctuation_count = sum(1 for char in text if char in '。，、；：「」『』（）[]{}!?,.')
+        punctuation_ratio = punctuation_count / total_chars
+        
+        # 綜合判斷
+        is_meaningful = (
+            unique_ratio >= min_unique_ratio and
+            not has_repetitive_pattern and
+            punctuation_ratio <= 0.3  # 標點符號不應超過30%
+        )
+        
+        if not is_meaningful:
+            logger.warning(f"文本可能無意義: 唯一字符比例={unique_ratio:.2f}, "
+                         f"存在重複模式={has_repetitive_pattern}, "
+                         f"標點符號比例={punctuation_ratio:.2f}")
+        
+        return is_meaningful
+        
+    except Exception as e:
+        logger.error(f"判斷文本意義時出錯: {str(e)}")
+        return False
+
+def text_similarity(text1: str, text2: str) -> tuple:
+    """
+    計算文字相似度
+    
+    返回:
+        tuple: (相似度分數, 是否進行了實際比對, 權重調整說明)
+    """
     try:
         # 如果文字為空，返回 0
         if not text1 or not text2:
             logger.warning("文字為空，返回相似度 0")
-            return 0.0
+            return (0.0, False, "文本為空")
+            
+        # 判斷兩段文本是否有意義
+        text1_meaningful = is_meaningful_text(text1)
+        text2_meaningful = is_meaningful_text(text2)
+        
+        if not text1_meaningful or not text2_meaningful:
+            logger.warning("檢測到無意義文本，跳過相似度計算")
+            return (0.0, False, "檢測到無意義文本")
             
         logger.info("開始計算文本相似度...")
         
@@ -512,12 +571,16 @@ def text_similarity(text1: str, text2: str) -> float:
         with torch.no_grad():
             similarity = util.pytorch_cos_sim(emb1, emb2)[0][0].item()
         
-        logger.info(f"文本相似度計算完成: {similarity:.4f}")
-        return float(similarity)
+        # 根據文本長度調整權重
+        len_ratio = min(len(text1), len(text2)) / max(len(text1), len(text2))
+        adjusted_similarity = similarity * (0.7 + 0.3 * len_ratio)  # 長度差異影響30%的權重
+        
+        logger.info(f"文本相似度計算完成: 原始={similarity:.4f}, 調整後={adjusted_similarity:.4f}")
+        return (float(adjusted_similarity), True, f"長度比例={len_ratio:.2f}")
         
     except Exception as e:
         logger.error(f"計算文本相似度時出錯: {str(e)}")
-        return 0.0
+        return (0.0, False, f"錯誤: {str(e)}")
     finally:
         # 確保清理所有資源
         if gpu_manager.is_pytorch_cuda_available():

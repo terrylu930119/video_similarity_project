@@ -4,9 +4,15 @@ import os
 import time
 import numpy as np
 import librosa
+import openl3
 from typing import Dict, Optional
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from sklearn.metrics.pairwise import cosine_similarity
+from scipy.spatial.distance import euclidean
+from librosa.sequence import dtw
 
 # 全局緩存
 _feature_cache: Dict[str, np.ndarray] = {}
@@ -18,6 +24,17 @@ def load_audio(audio_path: str) -> Optional[tuple]:
         return y, sr
     except Exception as e:
         logger.error(f"載入音頻文件失敗 {audio_path}: {str(e)}")
+        return None
+
+def extract_openl3_embedding(audio_path: str, embedding_size: int = 512) -> Optional[np.ndarray]:
+    try:
+        y, sr = load_audio(audio_path)
+        if y is None:
+            return None
+        emb, ts = openl3.get_audio_embedding(y, sr, embedding_size=embedding_size)
+        return emb
+    except Exception as e:
+        logger.error(f"使用 OpenL3 提取音頻嵌入失敗 {audio_path}: {str(e)}")
         return None
 
 def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
@@ -50,6 +67,19 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
         logger.error(f"特徵提取失敗: {str(e)}")
         return None
 
+def apply_pca(embeddings: np.ndarray, n_components: int = 50):
+    # 如果輸入維度小於目標維度，直接返回原始數據
+    if embeddings.shape[0] < n_components or embeddings.shape[1] < n_components:
+        return embeddings
+    pca = PCA(n_components=min(n_components, embeddings.shape[0], embeddings.shape[1]))
+    reduced_embeddings = pca.fit_transform(embeddings)
+    return reduced_embeddings
+
+def apply_tsne(embeddings: np.ndarray, n_components: int = 2):
+    tsne = TSNE(n_components=n_components)
+    reduced_embeddings = tsne.fit_transform(embeddings)
+    return reduced_embeddings
+
 def compute_audio_features(audio_path: str) -> Optional[np.ndarray]:
     global _feature_cache
     try:
@@ -65,19 +95,35 @@ def compute_audio_features(audio_path: str) -> Optional[np.ndarray]:
         if features is None:
             return None
 
+        # 合併特徵並進行標準化
         combined_features = np.concatenate([
             features['mel'],
             features['mfcc'],
             features['chroma']
         ])
 
+        # 標準化特徵
         combined_features = (combined_features - np.mean(combined_features)) / (np.std(combined_features) + 1e-8)
+        
+        # 存儲為 1D 數組
         _feature_cache[audio_path] = combined_features
 
         return combined_features
     except Exception as e:
         logger.error(f"提取音頻特徵時出錯: {str(e)}")
         return None
+
+def compute_cosine_similarity(embeddings1: np.ndarray, embeddings2: np.ndarray) -> float:
+    similarity = cosine_similarity([embeddings1], [embeddings2])
+    return similarity[0][0]
+
+def compute_euclidean_distance(embeddings1: np.ndarray, embeddings2: np.ndarray) -> float:
+    distance = euclidean(embeddings1, embeddings2)
+    return distance
+
+def compute_dtw_distance(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+    D, wp = dtw(embedding1, embedding2)
+    return D[-1, -1]
 
 def audio_similarity(path1: str, path2: str) -> float:
     try:
@@ -113,8 +159,13 @@ def audio_similarity(path1: str, path2: str) -> float:
             logger.error("無法提取音頻特徵")
             return 0.0
 
-        similarity = np.dot(features1, features2) / (np.linalg.norm(features1) * np.linalg.norm(features2))
+        # 可以選擇 Cosine Similarity 或 Euclidean Distance
+        similarity = compute_cosine_similarity(features1, features2)
         logger.info(f"音頻相似度: {similarity:.3f}")
+
+        # 若需要使用 DTW 進行時間序列對齊
+        dtw_distance = compute_dtw_distance(features1, features2)
+        logger.info(f"DTW 距離: {dtw_distance:.3f}")
 
         return float(similarity)
     except Exception as e:

@@ -24,7 +24,6 @@ scenedetect>=0.6.0
 librosa>=0.8.0
 soundfile>=0.10.0
 chromaprint>=0.5.0 
-demucs>=0.4.0
 
 # 其他依賴
 yt-dlp>=2024.04.14

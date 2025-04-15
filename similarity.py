@@ -155,22 +155,36 @@ def calculate_overall_similarity(audio1: str, audio2: str,
     # 計算文本相似度
     try:
         logger.info("開始計算文本相似度")
-        t_sim = text_similarity(text1, text2)
-        logger.info(f"文本相似度: {t_sim:.3f}")
+        t_sim, is_meaningful, reason = text_similarity(text1, text2)
+        if not is_meaningful:
+            logger.warning(f"文本相似度計算跳過: {reason}")
+            # 如果文本無意義，調整權重
+            total_weight = weights['audio'] + weights['image']
+            weights = {
+                'audio': 0.5,
+                'image': 0.5,
+                'text': 0  # 文本權重設為0
+            }
+        logger.info(f"文本相似度: {t_sim:.3f} ({reason})")
     except Exception as e:
         logger.error(f"計算文本相似度時出錯: {str(e)}")
         t_sim = 0
     
     # 計算加權總分
     overall = weights['audio']*a_sim + weights['image']*i_sim + weights['text']*t_sim
-    logger.info(f"整體相似度: {overall:.3f} (音頻={a_sim:.3f}, 圖像={i_sim:.3f}, 文本={t_sim:.3f})")
+    logger.info(f"整體相似度: {overall:.3f} (音頻={a_sim:.3f}*{weights['audio']:.2f}, "
+               f"圖像={i_sim:.3f}*{weights['image']:.2f}, "
+               f"文本={t_sim:.3f}*{weights['text']:.2f})")
     
-    # 返回所有相似度結果
+    # 返回所有相似度結果和權重信息
     return {
         "audio_similarity": a_sim,
         "image_similarity": i_sim,
         "text_similarity": t_sim,
-        "overall_similarity": overall
+        "overall_similarity": overall,
+        "weights": weights,
+        "text_meaningful": is_meaningful,
+        "text_status": reason
     }
 
 def display_similarity_results(reference_link: str, comparison_results: List[Dict[str, Union[str, float]]]):
@@ -190,10 +204,17 @@ def display_similarity_results(reference_link: str, comparison_results: List[Dic
 
     for result in comparison_results:
         link_display = result['link'][:60] + '...' if len(result['link']) > 63 else result['link']
+        # 如果文本無意義，添加標註
+        text_sim_display = f"{result['text_similarity']:>14.3f}"
+        if 'text_meaningful' in result and not result['text_meaningful']:
+            text_sim_display = f"{result['text_similarity']:>14.3f}*"  # 添加星號標註
+        
         print(f"{link_display:<62} "
-            f"{result['audio_similarity']:>14.3f} "
-            f"{result['image_similarity']:>14.3f} "
-            f"{result['text_similarity']:>14.3f} "
-            f"{result['overall_similarity']:>14.3f}")
+              f"{result['audio_similarity']:>14.3f} "
+              f"{result['image_similarity']:>14.3f} "
+              f"{text_sim_display} "
+              f"{result['overall_similarity']:>14.3f}")
     print("-" * 120)
-
+    # 添加註解說明
+    if any(not r.get('text_meaningful', True) for r in comparison_results):
+        print("\n註: * 表示該影片的文本內容被判定為無意義，其文本相似度權重已被重新分配到音訊和畫面相似度")
