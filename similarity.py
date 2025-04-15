@@ -156,15 +156,22 @@ def calculate_overall_similarity(audio1: str, audio2: str,
     try:
         logger.info("開始計算文本相似度")
         t_sim, is_meaningful, reason = text_similarity(text1, text2)
+        
+        # 根據文本相似度的結果動態調整權重
         if not is_meaningful:
             logger.warning(f"文本相似度計算跳過: {reason}")
-            # 如果文本無意義，調整權重
-            total_weight = weights['audio'] + weights['image']
+            # 如果文本無意義，將權重重新分配給音頻和圖像
+            audio_weight = weights['audio'] / (weights['audio'] + weights['image'])
+            image_weight = weights['image'] / (weights['audio'] + weights['image'])
             weights = {
-                'audio': 0.5,
-                'image': 0.5,
+                'audio': audio_weight,
+                'image': image_weight,
                 'text': 0  # 文本權重設為0
             }
+        else:
+            # 如果文本有意義，使用原始權重
+            weights = weights.copy()
+            
         logger.info(f"文本相似度: {t_sim:.3f} ({reason})")
     except Exception as e:
         logger.error(f"計算文本相似度時出錯: {str(e)}")

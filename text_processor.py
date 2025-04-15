@@ -23,8 +23,8 @@ def get_whisper_model():
     """
     global _whisper_model
     if _whisper_model is None:
-        logger.info("正在載入 Whisper small 模型...")
-        _whisper_model = whisper.load_model("small")
+        logger.info("正在載入 Whisper medium 模型...")
+        _whisper_model = whisper.load_model("medium")
         # 如果有 GPU，將模型移至 GPU
         if gpu_manager.is_pytorch_cuda_available():
             logger.info("將 Whisper 模型移至 GPU")
@@ -493,59 +493,73 @@ def compute_text_embedding(text: str) -> torch.Tensor:
         logger.error(f"計算文本嵌入向量時出錯: {str(e)}")
         return None
 
-def is_meaningful_text(text: str, min_length: int = 50, min_unique_ratio: float = 0.3) -> bool:
+def is_meaningful_text(text: str, min_length: int = 10) -> tuple:
     """
-    判斷文本是否有意義
+    判斷文本是否有意義，主要檢查：
+    1. 是否為空白或長度過短
+    2. 是否存在大量重複內容（根據文本長度動態調整）
     
     參數:
         text: 要分析的文本
         min_length: 最小文本長度
-        min_unique_ratio: 最小唯一字符比例
     
     返回:
-        bool: 文本是否有意義
+        tuple: (是否有意義, 原因描述)
     """
     try:
-        if not text or len(text) < min_length:
-            logger.warning(f"文本長度過短 ({len(text)} 字符)")
-            return False
+        # 檢查空白
+        if not text:
+            return (False, "文本為空")
+        
+        # 移除多餘空白
+        text = ' '.join(text.split())
+        if not text:
+            return (False, "文本僅包含空白字符")
             
-        # 計算唯一字符比例
-        total_chars = len(text)
-        unique_chars = len(set(text))
-        unique_ratio = unique_chars / total_chars
+        # 檢查最小長度
+        if len(text) < min_length:
+            return (False, f"文本長度過短 ({len(text)} 字符)")
+            
+        # 檢查重複模式（根據文本長度動態調整）
+        text_length = len(text)
         
+        # 定義重複檢查的參數
+        if text_length < 100:  # 短文本
+            pattern_length = 3
+            repeat_times = 3
+        elif text_length < 500:  # 中等文本
+            pattern_length = 5
+            repeat_times = 4
+        else:  # 長文本
+            pattern_length = 10
+            repeat_times = 5
+            
         # 檢查重複模式
-        has_repetitive_pattern = bool(re.search(r'(.{3,}?)\1{2,}', text))
+        pattern = f'(.{{{pattern_length},}}?)\\1{{{repeat_times-1},}}'
+        matches = list(re.finditer(pattern, text))
         
-        # 檢查標點符號比例
-        punctuation_count = sum(1 for char in text if char in '。，、；：「」『』（）[]{}!?,.')
-        punctuation_ratio = punctuation_count / total_chars
+        if matches:
+            # 計算重複內容佔總文本的比例
+            total_repeated_length = sum(len(m.group(0)) for m in matches)
+            repeat_ratio = total_repeated_length / text_length
+            
+            # 如果重複內容超過文本的 70%，判定為無意義
+            if repeat_ratio > 0.7:
+                repeated_examples = [m.group(1) for m in matches[:3]]  # 取前三個重複示例
+                return (False, f"存在大量重複內容（佔比 {repeat_ratio:.1%}），例如：{', '.join(repeated_examples)}")
         
-        # 綜合判斷
-        is_meaningful = (
-            unique_ratio >= min_unique_ratio and
-            not has_repetitive_pattern and
-            punctuation_ratio <= 0.3  # 標點符號不應超過30%
-        )
-        
-        if not is_meaningful:
-            logger.warning(f"文本可能無意義: 唯一字符比例={unique_ratio:.2f}, "
-                         f"存在重複模式={has_repetitive_pattern}, "
-                         f"標點符號比例={punctuation_ratio:.2f}")
-        
-        return is_meaningful
+        return (True, "文本有效")
         
     except Exception as e:
         logger.error(f"判斷文本意義時出錯: {str(e)}")
-        return False
+        return (False, f"錯誤: {str(e)}")
 
 def text_similarity(text1: str, text2: str) -> tuple:
     """
     計算文字相似度
     
     返回:
-        tuple: (相似度分數, 是否進行了實際比對, 權重調整說明)
+        tuple: (相似度分數, 是否有效比對, 狀態說明)
     """
     try:
         # 如果文字為空，返回 0
@@ -554,18 +568,27 @@ def text_similarity(text1: str, text2: str) -> tuple:
             return (0.0, False, "文本為空")
             
         # 判斷兩段文本是否有意義
-        text1_meaningful = is_meaningful_text(text1)
-        text2_meaningful = is_meaningful_text(text2)
+        text1_meaningful, text1_reason = is_meaningful_text(text1)
+        text2_meaningful, text2_reason = is_meaningful_text(text2)
         
+        # 如果任一文本無意義，返回詳細原因
         if not text1_meaningful or not text2_meaningful:
-            logger.warning("檢測到無意義文本，跳過相似度計算")
-            return (0.0, False, "檢測到無意義文本")
+            reasons = []
+            if not text1_meaningful:
+                reasons.append(f"文本1: {text1_reason}")
+            if not text2_meaningful:
+                reasons.append(f"文本2: {text2_reason}")
+            logger.warning(f"檢測到無意義文本: {'; '.join(reasons)}")
+            return (0.0, False, "; ".join(reasons))
             
         logger.info("開始計算文本相似度...")
         
         # 計算嵌入向量
         emb1 = compute_text_embedding(text1)
         emb2 = compute_text_embedding(text2)
+        
+        if emb1 is None or emb2 is None:
+            return (0.0, False, "嵌入向量計算失敗")
         
         # 計算相似度
         with torch.no_grad():
@@ -576,7 +599,7 @@ def text_similarity(text1: str, text2: str) -> tuple:
         adjusted_similarity = similarity * (0.7 + 0.3 * len_ratio)  # 長度差異影響30%的權重
         
         logger.info(f"文本相似度計算完成: 原始={similarity:.4f}, 調整後={adjusted_similarity:.4f}")
-        return (float(adjusted_similarity), True, f"長度比例={len_ratio:.2f}")
+        return (float(adjusted_similarity), True, f"有效比對，長度比例={len_ratio:.2f}")
         
     except Exception as e:
         logger.error(f"計算文本相似度時出錯: {str(e)}")
