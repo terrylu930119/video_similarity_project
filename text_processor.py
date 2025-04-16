@@ -12,6 +12,7 @@ from audio_processor import load_audio
 from concurrent.futures import ThreadPoolExecutor
 import soundfile as sf
 from math import ceil
+import torchaudio
 
 # 全域模型變數
 _whisper_model = None
@@ -294,18 +295,17 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 180) 
         segment_duration: 每個片段的持續時間（秒），預設3分鐘
     """
     try:
-        # 使用 audio_processor 的 load_audio 函數
-        audio_data = load_audio(audio_path)
-        if audio_data is None:
-            return []
+        # 使用 torchaudio 載入音頻
+        waveform, sr = torchaudio.load(audio_path)
+        if waveform.size(0) > 1:  # 如果是多聲道，轉換為單聲道
+            waveform = waveform.mean(dim=0, keepdim=True)
             
-        y, sr = audio_data
-        duration = len(y) / sr
+        duration = waveform.size(1) / sr
         logger.info(f"音頻總長度: {duration:.2f} 秒")
         
         # 計算分段
         samples_per_segment = segment_duration * sr
-        num_segments = ceil(len(y) / samples_per_segment)
+        num_segments = ceil(waveform.size(1) / samples_per_segment)
         logger.info(f"將分割成 {num_segments} 個片段，每段 {segment_duration} 秒")
         
         # 創建臨時目錄
@@ -315,15 +315,15 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 180) 
         def process_segment(i):
             try:
                 # 計算片段的起始和結束位置
-                start = i * samples_per_segment
-                end = min((i + 1) * samples_per_segment, len(y))
+                start = int(i * samples_per_segment)
+                end = int(min((i + 1) * samples_per_segment, waveform.size(1)))
                 
                 # 提取片段
-                segment = y[int(start):int(end)]
+                segment = waveform[:, start:end]
                 
                 # 保存片段
                 segment_path = os.path.join(temp_dir, f"segment_{i:03d}.wav")
-                sf.write(segment_path, segment, sr)
+                torchaudio.save(segment_path, segment, sr)
                 logger.info(f"已保存片段 {i+1}/{num_segments}")
                 return segment_path
             except Exception as e:
@@ -335,7 +335,13 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 180) 
             segment_files = list(executor.map(process_segment, range(num_segments)))
         
         # 過濾掉失敗的片段
-        return [f for f in segment_files if f is not None]
+        valid_segments = [f for f in segment_files if f is not None]
+        
+        if not valid_segments:
+            logger.error("沒有成功生成的音頻片段")
+            return []
+            
+        return valid_segments
         
     except Exception as e:
         logger.error(f"分割音頻時出錯: {str(e)}")

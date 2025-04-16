@@ -5,7 +5,7 @@ import time
 import numpy as np
 import librosa
 import openl3
-from typing import Dict, Optional
+from typing import Dict, Optional, Generator, Tuple, Any
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.decomposition import PCA
@@ -13,15 +13,45 @@ from sklearn.manifold import TSNE
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.distance import euclidean
 from librosa.sequence import dtw
+import psutil
+import gc
+import hashlib
+import sys
 
-# 全局緩存
-_feature_cache: Dict[str, np.ndarray] = {}
+# 修改全局緩存為 LRU 緩存
+_feature_cache = lru_cache(maxsize=10)  # 限制只緩存最近使用的10個檔案的特徵
 
 @lru_cache(maxsize=32)
-def load_audio(audio_path: str) -> Optional[tuple]:
+def get_optimal_chunk_size(file_size: int) -> float:
+    """根據檔案大小動態調整分塊大小"""
+    base_chunk_duration = 30.0
+    if file_size > 1024 * 1024 * 1024:  # 1GB
+        return 15.0  # 較小的分塊
+    elif file_size > 512 * 1024 * 1024:  # 512MB
+        return 30.0
+    else:
+        return 60.0  # 較大的分塊
+
+@lru_cache(maxsize=32)
+def load_audio(audio_path: str) -> Generator[Tuple[np.ndarray, int], None, None]:
+    file_size = os.path.getsize(audio_path)
+    chunk_duration = get_optimal_chunk_size(file_size)
+    
     try:
-        y, sr = librosa.load(audio_path, sr=None)
-        return y, sr
+        stream = librosa.stream(
+            audio_path,
+            block_length=int(chunk_duration * 22050),
+            frame_length=2048,
+            hop_length=1024  # 增加 hop_length
+        )
+        
+        for y_block in stream:
+            # 檢查記憶體使用
+            if psutil.virtual_memory().percent > 80:
+                gc.collect()
+                time.sleep(1)
+            yield y_block, 22050
+            
     except Exception as e:
         logger.error(f"載入音頻文件失敗 {audio_path}: {str(e)}")
         return None
@@ -38,29 +68,97 @@ def extract_openl3_embedding(audio_path: str, embedding_size: int = 512) -> Opti
         return None
 
 def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
+    # 減少特徵維度
+    n_mfcc = 13  # 從20減少到13
+    hop_length = 1024  # 增加 hop_length 減少計算量
+    
     try:
-        segment_length = sr * 10
+        segment_length = sr * 5  # 從10秒減少到5秒
         segments = [audio_data[i:i + segment_length] for i in range(0, len(audio_data), segment_length)]
 
         def extract_segment_features(segment):
-            mel_spec = librosa.feature.melspectrogram(y=segment, sr=sr)
-            mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-            mfcc = librosa.feature.mfcc(y=segment, sr=sr, n_mfcc=13)
-            chroma = librosa.feature.chroma_stft(y=segment, sr=sr)
+            if len(segment) < sr * 0.5:
+                return None
+
+            # 使用較低的採樣率計算梅爾頻譜圖
+            mel_spec = librosa.feature.melspectrogram(
+                y=segment, 
+                sr=sr,
+                n_mels=64,  # 減少梅爾頻帶數量
+                hop_length=hop_length
+            )
+            
+            # 只計算必要的特徵
+            mfcc = librosa.feature.mfcc(
+                y=segment, 
+                sr=sr, 
+                n_mfcc=n_mfcc,
+                hop_length=hop_length
+            )
+            
+            # 只計算一階差分
+            mfcc_delta = librosa.feature.delta(mfcc)
+            
+            # 使用較低維度的色度特徵
+            chroma = librosa.feature.chroma_stft(
+                y=segment, 
+                sr=sr,
+                hop_length=hop_length,
+                n_chroma=12
+            )
+            
+            # 使用較大的 hop_length 計算節奏特徵
+            onset_env = librosa.onset.onset_strength(
+                y=segment, 
+                sr=sr,
+                hop_length=hop_length
+            )
+            
+            def get_stats(feature):
+                if len(feature.shape) == 1:
+                    feature = feature.reshape(1, -1)
+                stats = {
+                    'mean': np.mean(feature, axis=1),
+                    'std': np.std(feature, axis=1),
+                    'max': np.max(feature, axis=1),
+                    'min': np.min(feature, axis=1),
+                    'median': np.median(feature, axis=1)
+                }
+                # 確保所有統計量具有相同的形狀
+                return {k: np.array(v, dtype=np.float32) for k, v in stats.items()}
+            
             return {
-                'mel': np.mean(mel_spec_db, axis=1),
-                'mfcc': np.mean(mfcc, axis=1),
-                'chroma': np.mean(chroma, axis=1)
+                'mfcc': get_stats(mfcc),
+                'mfcc_delta': get_stats(mfcc_delta),
+                'chroma': get_stats(chroma),
+                'onset_env': onset_env.astype(np.float32),
+                'tempo': float(librosa.beat.tempo(onset_envelope=onset_env, sr=sr)[0])
             }
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             segment_features = list(executor.map(extract_segment_features, segments))
+            
+        # 過濾掉無效的段
+        segment_features = [f for f in segment_features if f is not None]
+        if not segment_features:
+            logger.error("沒有有效的音頻段可供處理")
+            return None
 
-        combined_features = {
-            'mel': np.mean([f['mel'] for f in segment_features], axis=0),
-            'mfcc': np.mean([f['mfcc'] for f in segment_features], axis=0),
-            'chroma': np.mean([f['chroma'] for f in segment_features], axis=0)
-        }
+        # 合併所有段的特徵
+        combined_features = {}
+        for key in segment_features[0].keys():
+            if key == 'onset_env':
+                # 對於時間序列特徵，保留完整序列
+                combined_features[key] = np.concatenate([f[key] for f in segment_features])
+            elif key == 'tempo':
+                # 對於單一數值特徵，取平均
+                combined_features[key] = float(np.mean([f[key] for f in segment_features]))
+            else:
+                # 對於統計特徵，分別合併各個統計量
+                combined_features[key] = {
+                    stat: np.mean([f[key][stat] for f in segment_features], axis=0).astype(np.float32)
+                    for stat in segment_features[0][key].keys()
+                }
 
         return combined_features
     except Exception as e:
@@ -80,35 +178,71 @@ def apply_tsne(embeddings: np.ndarray, n_components: int = 2):
     reduced_embeddings = tsne.fit_transform(embeddings)
     return reduced_embeddings
 
-def compute_audio_features(audio_path: str) -> Optional[np.ndarray]:
-    global _feature_cache
+def cache_features_to_disk(features: dict, cache_dir: str, file_id: str):
+    """將特徵暫存到磁碟"""
+    cache_path = os.path.join(cache_dir, f"{file_id}_features.npz")
+    # 確保所有特徵都被正確轉換為可序列化的格式
+    processed_features = {}
+    for k, v in features.items():
+        if isinstance(v, dict):
+            processed_features[k] = np.array(v)  # 將字典轉換為對象數組
+        elif isinstance(v, (float, int)):
+            processed_features[k] = np.array(v)
+        else:
+            processed_features[k] = v  # 保持數組不變
+    np.savez_compressed(cache_path, **processed_features)
+    return cache_path
+
+def load_cached_features(cache_path: str) -> dict:
+    """從磁碟載入特徵"""
+    with np.load(cache_path, allow_pickle=True) as data:
+        features = {}
+        for k in data.files:
+            if isinstance(data[k], np.ndarray):
+                if data[k].dtype == np.dtype('O'):
+                    features[k] = data[k].item()  # 將對象數組轉換回字典
+                else:
+                    features[k] = data[k]  # 保持普通數組不變
+            else:
+                features[k] = data[k]
+        return features
+
+def compute_audio_features(audio_path: str) -> Optional[dict]:
     try:
-        if audio_path in _feature_cache:
-            return _feature_cache[audio_path]
-
-        audio_data = load_audio(audio_path)
-        if audio_data is None:
-            return None
-
-        y, sr = audio_data
-        features = parallel_feature_extraction(y, sr)
-        if features is None:
-            return None
-
-        # 合併特徵並進行標準化
-        combined_features = np.concatenate([
-            features['mel'],
-            features['mfcc'],
-            features['chroma']
-        ])
-
-        # 標準化特徵
-        combined_features = (combined_features - np.mean(combined_features)) / (np.std(combined_features) + 1e-8)
+        cache_dir = os.path.join(os.path.dirname(audio_path), ".cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        file_id = hashlib.md5(audio_path.encode()).hexdigest()
+        cache_path = os.path.join(cache_dir, f"{file_id}_features.npz")
         
-        # 存儲為 1D 數組
-        _feature_cache[audio_path] = combined_features
-
-        return combined_features
+        # 檢查緩存
+        if os.path.exists(cache_path):
+            return load_cached_features(cache_path)
+            
+        def process_chunks():
+            for y_chunk, sr in load_audio(audio_path):
+                chunk_features = parallel_feature_extraction(y_chunk, sr)
+                if chunk_features:
+                    yield chunk_features
+                gc.collect()
+            
+        features_list = []
+        total_size = 0
+        
+        for chunk_feature in process_chunks():
+            features_list.append(chunk_feature)
+            total_size += sys.getsizeof(chunk_feature)
+            
+            # 如果中間結果太大，寫入磁碟
+            if total_size > 500 * 1024 * 1024:  # 500MB
+                intermediate = combine_features(features_list)
+                cache_features_to_disk(intermediate, cache_dir, f"{file_id}_temp")
+                features_list = []
+                total_size = 0
+        
+        final_features = combine_features(features_list)
+        cache_features_to_disk(final_features, cache_dir, file_id)
+        return final_features
+        
     except Exception as e:
         logger.error(f"提取音頻特徵時出錯: {str(e)}")
         return None
@@ -125,33 +259,128 @@ def compute_dtw_distance(embedding1: np.ndarray, embedding2: np.ndarray) -> floa
     D, wp = dtw(embedding1, embedding2)
     return D[-1, -1]
 
+def compute_weighted_similarity(features1: dict, features2: dict) -> float:
+    try:
+        # 首先檢查是否為完全相同的特徵
+        if features1 is features2:  # 如果是同一個對象引用
+            return 1.0
+
+        # 檢查所有特徵是否完全相同
+        all_equal = True
+        for key in features1.keys():
+            if key not in features2:
+                all_equal = False
+                break
+            if key == 'onset_env':
+                if not np.array_equal(features1[key], features2[key]):
+                    all_equal = False
+                    break
+            elif key == 'tempo':
+                if abs(features1[key] - features2[key]) > 1e-6:
+                    all_equal = False
+                    break
+            else:
+                for stat in features1[key].keys():
+                    if not np.array_equal(features1[key][stat], features2[key][stat]):
+                        all_equal = False
+                        break
+        
+        if all_equal:
+            return 1.0
+
+        similarities = []
+        weights = []
+
+        # DTW 距離計算（用於時間序列特徵）
+        onset_dtw = dtw(features1['onset_env'], features2['onset_env'])[0][-1, -1]
+        # 正規化 DTW 距離
+        onset_sim = 1.0 / (1.0 + onset_dtw / len(features1['onset_env']))
+        similarities.append(onset_sim)
+        weights.append(2.0)  # 給予節奏特徵更高權重
+
+        # 時間序列特徵的 DTW 距離
+        mfcc_dtw = dtw(features1['mfcc']['mean'], features2['mfcc']['mean'])[0][-1, -1]
+        # 正規化 MFCC DTW 距離
+        mfcc_sim = 1.0 / (1.0 + mfcc_dtw / len(features1['mfcc']['mean']))
+        similarities.append(mfcc_sim)
+        weights.append(1.5)
+
+        # 統計特徵的餘弦相似度
+        for feature_name in ['mfcc', 'mfcc_delta', 'chroma']:
+            for stat in ['mean', 'std']:
+                if feature_name in features1 and feature_name in features2:
+                    feat1 = features1[feature_name][stat]
+                    feat2 = features2[feature_name][stat]
+                    # 確保向量非零
+                    if np.any(feat1) and np.any(feat2):
+                        sim = cosine_similarity([feat1], [feat2])[0][0]
+                        # 將相似度範圍從[-1,1]調整到[0,1]
+                        sim = (sim + 1) / 2
+                        similarities.append(sim)
+                        # 給予不同特徵不同權重
+                        if feature_name in ['mfcc', 'mfcc_delta']:
+                            weights.append(1.2)
+                        else:
+                            weights.append(0.8)
+
+        # Tempo 差異
+        tempo_diff = abs(features1['tempo'] - features2['tempo'])
+        tempo_sim = 1.0 / (1.0 + tempo_diff / 20.0)  # 調整 tempo 差異的敏感度
+        similarities.append(tempo_sim)
+        weights.append(1.5)
+
+        # 計算加權平均
+        if not similarities:  # 如果沒有有效的相似度計算結果
+            return 0.0
+            
+        weighted_sum = sum(s * w for s, w in zip(similarities, weights))
+        total_weight = sum(weights)
+        final_similarity = weighted_sum / total_weight
+
+        # 確保相似度在 [0,1] 範圍內
+        final_similarity = max(0.0, min(1.0, final_similarity))
+
+        return float(final_similarity)
+    except Exception as e:
+        logger.error(f"計算加權相似度時出錯: {str(e)}")
+        return 0.0
+
+def combine_features(features_list: list) -> dict:
+    """合併多個音頻塊的特徵"""
+    if not features_list:
+        return None
+    
+    combined = {}
+    for key in features_list[0].keys():
+        if key == 'onset_env':
+            combined[key] = np.concatenate([f[key] for f in features_list])
+        elif key == 'tempo':
+            combined[key] = float(np.mean([f[key] for f in features_list]))
+        else:
+            combined[key] = {
+                stat: np.mean([f[key][stat] for f in features_list], axis=0)
+                for stat in features_list[0][key].keys()
+            }
+    return combined
+
+def get_optimal_workers(file_size: int) -> int:
+    """根據檔案大小和系統資源動態調整工作線程數"""
+    available_memory = psutil.virtual_memory().available
+    cpu_count = os.cpu_count() or 4
+    
+    if file_size > 1024 * 1024 * 1024:  # 1GB
+        return min(2, cpu_count)
+    elif available_memory > 8 * 1024 * 1024 * 1024:  # 8GB可用記憶體
+        return min(4, cpu_count)
+    else:
+        return 1
+
 def audio_similarity(path1: str, path2: str) -> float:
     try:
-        path1 = os.path.abspath(os.path.normpath(path1))
-        path2 = os.path.abspath(os.path.normpath(path2))
-
-        logger.info(f"檢查音頻文件1: {path1}")
-        if not os.path.exists(path1):
-            logger.error(f"音頻文件1不存在: {path1}")
-            return 0.0
-        logger.info(f"檢查音頻文件2: {path2}")
-        if not os.path.exists(path2):
-            logger.error(f"音頻文件2不存在: {path2}")
-            return 0.0
-
-        size1 = os.path.getsize(path1)
-        if size1 == 0:
-            logger.error(f"音頻文件1大小為0: {path1}")
-            return 0.0
-        size2 = os.path.getsize(path2)
-        if size2 == 0:
-            logger.error(f"音頻文件2大小為0: {path2}")
-            return 0.0
-
-        logger.info(f"音頻文件1大小: {size1} bytes")
-        logger.info(f"音頻文件2大小: {size2} bytes")
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        file_size = max(os.path.getsize(path1), os.path.getsize(path2))
+        max_workers = get_optimal_workers(file_size)
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             features = list(executor.map(compute_audio_features, [path1, path2]))
 
         features1, features2 = features
@@ -159,13 +388,9 @@ def audio_similarity(path1: str, path2: str) -> float:
             logger.error("無法提取音頻特徵")
             return 0.0
 
-        # 可以選擇 Cosine Similarity 或 Euclidean Distance
-        similarity = compute_cosine_similarity(features1, features2)
-        logger.info(f"音頻相似度: {similarity:.3f}")
-
-        # 若需要使用 DTW 進行時間序列對齊
-        dtw_distance = compute_dtw_distance(features1, features2)
-        logger.info(f"DTW 距離: {dtw_distance:.3f}")
+        # 計算加權相似度
+        similarity = compute_weighted_similarity(features1, features2)
+        logger.info(f"加權音頻相似度: {similarity:.3f}")
 
         return float(similarity)
     except Exception as e:
@@ -214,3 +439,14 @@ def extract_audio(video_path: str) -> str:
     except Exception as e:
         logger.error(f"音訊提取失敗: {str(e)}")
         raise
+
+def check_memory_usage():
+    memory = psutil.virtual_memory()
+    if memory.percent > 80:
+        # 清理緩存
+        _feature_cache.cache_clear()
+        # 強制垃圾回收
+        gc.collect()
+        # 如果記憶體仍然高，等待一段時間
+        if psutil.virtual_memory().percent > 80:
+            time.sleep(1)
