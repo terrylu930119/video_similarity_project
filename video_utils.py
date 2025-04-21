@@ -1,14 +1,12 @@
 import cv2
 import os
 import subprocess
-from logger import logger
-from gpu_utils import gpu_manager
 import numpy as np
+from logger import logger
 from typing import List, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
-import threading
-
+import torch
 def check_video_file(video_path: str) -> bool:
     """檢查影片檔案是否存在且可以打開"""
     if not os.path.exists(video_path):
@@ -77,7 +75,7 @@ def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0)
         ]
         
         # 嘗試使用 GPU 加速，如果失敗則回退到 CPU
-        if gpu_manager.is_pytorch_cuda_available():
+        if torch.cuda.is_available():
             try:
                 gpu_cmd = cmd.copy()
                 gpu_cmd.insert(1, '-hwaccel')

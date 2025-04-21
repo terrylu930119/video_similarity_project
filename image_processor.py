@@ -8,7 +8,6 @@ import os
 from logger import logger
 from gpu_utils import gpu_manager
 import time
-import signal
 from typing import List, Dict, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -21,7 +20,7 @@ _feature_cache = {}
 
 def cleanup():
     """清理資源"""
-    if gpu_manager.is_pytorch_cuda_available():
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
         gpu_manager.clear_gpu_memory()
 
@@ -46,7 +45,9 @@ def compute_phash(image_path: str) -> Optional[Tuple[np.ndarray, np.ndarray, np.
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         hsv = cv2.resize(hsv, (64, 64))
         
-        if gpu_manager.is_pytorch_cuda_available():
+        gpu_available = torch.cuda.is_available()
+        
+        if gpu_available:
             # 處理灰度特徵
             gray_tensor = torch.from_numpy(gray).float().cuda()
             gray_dct = torch.fft.rfft2(gray_tensor)
@@ -104,7 +105,7 @@ def get_image_model():
             # 移除最後的分類層，只保留特徵提取部分
             _image_model = torch.nn.Sequential(*list(_image_model.children())[:-1])
             
-            if gpu_manager.is_pytorch_cuda_available():
+            if torch.cuda.is_available():
                 _image_model = _image_model.cuda()
                 _image_model.eval()  # 設置為評估模式
             
@@ -161,12 +162,12 @@ def compute_batch_embeddings(image_paths: List[str], batch_size: int = 64) -> Op
                     continue
                 
                 batch_tensor = torch.stack(batch)
-                if gpu_manager.is_pytorch_cuda_available():
+                if torch.cuda.is_available():
                     batch_tensor = batch_tensor.cuda(non_blocking=True)
                 
                 with torch.no_grad():
                     features = model(batch_tensor)
-                    if gpu_manager.is_pytorch_cuda_available():
+                    if torch.cuda.is_available():
                         features = features.cpu()
                 
                 for j, feature in enumerate(features):
@@ -175,7 +176,7 @@ def compute_batch_embeddings(image_paths: List[str], batch_size: int = 64) -> Op
                     _feature_cache[image_paths[i + j]] = feature_np
                 
                 del batch_tensor, features
-                if gpu_manager.is_pytorch_cuda_available():
+                if torch.cuda.is_available():
                     torch.cuda.empty_cache()
         
         return np.array(embeddings)

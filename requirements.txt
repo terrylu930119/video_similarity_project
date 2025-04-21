@@ -10,9 +10,9 @@ Pillow>=8.0.0
 scikit-learn>=1.0.0
 
 # GPU 加速相關依賴
-torch>=2.0.0
-torchvision>=0.15.0
-torchaudio>=0.9.0
+torch==2.1.0+cu121
+torchvision==0.16.0+cu121
+torchaudio==2.1.0+cu121
 huggingface-hub>=0.16.4
 sentence-transformers>=2.2.2
 openai-whisper>=20230314
@@ -27,3 +27,5 @@ chromaprint>=0.5.0
 
 # 其他依賴
 yt-dlp>=2024.04.14
+openl3>=0.5.4
+psutil>=6.0.0

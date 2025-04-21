@@ -8,8 +8,6 @@ import openl3
 from typing import Dict, Optional, Generator, Tuple, Any
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.distance import euclidean
 from librosa.sequence import dtw
@@ -164,19 +162,6 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
     except Exception as e:
         logger.error(f"特徵提取失敗: {str(e)}")
         return None
-
-def apply_pca(embeddings: np.ndarray, n_components: int = 50):
-    # 如果輸入維度小於目標維度，直接返回原始數據
-    if embeddings.shape[0] < n_components or embeddings.shape[1] < n_components:
-        return embeddings
-    pca = PCA(n_components=min(n_components, embeddings.shape[0], embeddings.shape[1]))
-    reduced_embeddings = pca.fit_transform(embeddings)
-    return reduced_embeddings
-
-def apply_tsne(embeddings: np.ndarray, n_components: int = 2):
-    tsne = TSNE(n_components=n_components)
-    reduced_embeddings = tsne.fit_transform(embeddings)
-    return reduced_embeddings
 
 def cache_features_to_disk(features: dict, cache_dir: str, file_id: str):
     """將特徵暫存到磁碟"""
@@ -439,14 +424,3 @@ def extract_audio(video_path: str) -> str:
     except Exception as e:
         logger.error(f"音訊提取失敗: {str(e)}")
         raise
-
-def check_memory_usage():
-    memory = psutil.virtual_memory()
-    if memory.percent > 80:
-        # 清理緩存
-        _feature_cache.cache_clear()
-        # 強制垃圾回收
-        gc.collect()
-        # 如果記憶體仍然高，等待一段時間
-        if psutil.virtual_memory().percent > 80:
-            time.sleep(1)

@@ -4,7 +4,6 @@ import torch
 from sentence_transformers import SentenceTransformer, util
 from logger import logger
 from gpu_utils import gpu_manager
-import yt_dlp
 import os
 import re
 from itertools import groupby
@@ -27,9 +26,10 @@ def get_whisper_model():
         logger.info("正在載入 Whisper medium 模型...")
         _whisper_model = whisper.load_model("medium")
         # 如果有 GPU，將模型移至 GPU
-        if gpu_manager.is_pytorch_cuda_available():
+        gpu_available = torch.cuda.is_available()
+        if gpu_available:
             logger.info("將 Whisper 模型移至 GPU")
-            _whisper_model = _whisper_model.to(gpu_manager.get_pytorch_device())
+            _whisper_model = _whisper_model.to(torch.device('cuda'))
         logger.info("Whisper 模型載入完成")
     return _whisper_model
 
@@ -42,9 +42,10 @@ def get_sentence_transformer():
         logger.info("正在載入 SentenceTransformer 模型...")
         _sentence_transformer = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
         # 如果有 GPU，將模型移至 GPU
-        if gpu_manager.is_pytorch_cuda_available():
+        gpu_available = torch.cuda.is_available()
+        if gpu_available:
             logger.info("將 SentenceTransformer 模型移至 GPU")
-            _sentence_transformer = _sentence_transformer.to(gpu_manager.get_pytorch_device())
+            _sentence_transformer = _sentence_transformer.to(torch.device('cuda'))
         logger.info("SentenceTransformer 模型載入完成")
     return _sentence_transformer
 
@@ -398,7 +399,7 @@ def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = N
         logger.info("開始進行語音辨識...")
         
         # 清理 GPU 記憶體
-        if gpu_manager.is_pytorch_cuda_available():
+        if torch.cuda.is_available():
             torch.cuda.empty_cache()
         
         # 獲取模型
@@ -425,7 +426,7 @@ def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = N
                     temperature=0.0,
                     best_of=5,
                     beam_size=5,
-                    fp16=gpu_manager.is_pytorch_cuda_available(),
+                    fp16=torch.cuda.is_available(),
                     verbose=False,
                 )
                 
@@ -479,7 +480,7 @@ def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = N
         logger.error(f"轉錄音訊時出錯: {str(e)}")
         return ""
     finally:
-        if gpu_manager.is_pytorch_cuda_available():
+        if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
 def compute_text_embedding(text: str) -> torch.Tensor:
@@ -612,6 +613,6 @@ def text_similarity(text1: str, text2: str) -> tuple:
         return (0.0, False, f"錯誤: {str(e)}")
     finally:
         # 確保清理所有資源
-        if gpu_manager.is_pytorch_cuda_available():
+        if torch.cuda.is_available():
             torch.cuda.empty_cache()
             logger.info("最終清理 GPU 記憶體完成")

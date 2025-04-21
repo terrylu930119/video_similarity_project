@@ -11,6 +11,7 @@ from similarity import calculate_overall_similarity, display_similarity_results
 from video_utils import extract_frames, get_video_info
 from logger import logger
 from gpu_utils import gpu_manager
+import torch
 
 # 全局變量用於追踪清理狀態
 _cleanup_in_progress = False
@@ -119,27 +120,16 @@ def main():
         setup_signal_handlers()
         
         # 檢查 GPU 可用性
-        if gpu_manager.is_pytorch_cuda_available():
+        gpu_available = torch.cuda.is_available()
+        if gpu_available:
             logger.info("GPU 加速可用，將使用 GPU 進行處理")
         else:
             logger.warning("GPU 加速不可用，將使用 CPU 進行處理")
         
         # 設定參數
-        reference_link = "https://www.youtube.com/watch?v=dxmmSFQxWzM&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=1"
+        reference_link = "https://www.youtube.com/watch?v=EpGuPUW4w8o&list=RDEpGuPUW4w8o&index=2"
         comparison_links = [
-            "https://www.youtube.com/watch?v=dxmmSFQxWzM&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=1",
-            "https://www.youtube.com/watch?v=Bzl61esi4qc&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=2",
-            "https://www.youtube.com/watch?v=HagaJboujK4&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=3",
-            "https://www.youtube.com/watch?v=Z6cOxtDsfNU&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=4",
-            "https://www.youtube.com/watch?v=7D2uGv7aprQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=5",
-            "https://www.youtube.com/watch?v=jQraN1emvLQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=6",
-            "https://www.youtube.com/watch?v=RONGNWb7OpQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=7",
-            "https://www.youtube.com/watch?v=uh9jUhVTS28&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=8",
-            "https://www.youtube.com/watch?v=pGrI6hk0vBg&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=9",
-            "https://www.youtube.com/watch?v=m9cjOcCKIyQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=10",
-            "https://www.youtube.com/watch?v=Cfm8TWGkvYQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=11",
-            "https://www.youtube.com/watch?v=UtSEFdDZZLw&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=12",
-            "https://www.youtube.com/watch?v=3LLj3fTpRoM&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=13"
+            "https://www.youtube.com/watch?v=0PGfVrLeXUU"
         ]
         time_interval = 2.0  # 每2秒提取一幀
         resolution = "480p"

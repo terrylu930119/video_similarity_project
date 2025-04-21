@@ -8,7 +8,6 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import torch
-import cv2
 
 def check_files_exist(files: Union[str, List[str]], check_size: bool = True) -> bool:
     """
@@ -89,7 +88,7 @@ def calculate_overall_similarity(audio1: str, audio2: str,
         weights = {'audio': 0.3, 'image': 0.4, 'text': 0.3}
     
     # 檢查 GPU 可用性
-    gpu_available = gpu_manager.is_pytorch_cuda_available()
+    gpu_available = torch.cuda.is_available()
     if gpu_available:
         logger.info("使用 GPU 加速相似度計算")
     else:

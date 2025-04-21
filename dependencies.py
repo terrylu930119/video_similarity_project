@@ -3,12 +3,11 @@ import subprocess
 import sys
 import torch
 import cv2
-from logger import logger, log_gpu_info, log_system_info
+from logger import logger
 
 # 添加檢查狀態標記
 _checked_ffmpeg = False
 _checked_yt_dlp = False
-_checked_pytube = False
 _checked_cuda = False
 
 def install_requirements():
@@ -40,21 +39,6 @@ def check_yt_dlp():
         return True
     except subprocess.CalledProcessError:
         logger.error("請安裝 yt-dlp：pip install yt-dlp")
-        return False
-
-def check_pytube_version():
-    global _checked_pytube
-    if _checked_pytube:
-        return True
-        
-    try:
-        import pkg_resources
-        pytube_version = pkg_resources.get_distribution("pytube").version
-        logger.info(f"目前 PyTube 版本: {pytube_version}")
-        _checked_pytube = True
-        return True
-    except Exception as e:
-        logger.error(f"無法檢查 PyTube 版本: {str(e)}")
         return False
 
 def check_cuda():
@@ -102,5 +86,4 @@ if __name__ == "__main__":
     install_requirements()
     check_ffmpeg()
     check_yt_dlp()
-    check_pytube_version()
     check_gpu_dependencies()
