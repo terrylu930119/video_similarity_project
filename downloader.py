@@ -9,20 +9,27 @@ def is_valid_youtube_url(url: str) -> bool:
     youtube_regex = (
         r'(https?://)?(www\.)?'
         r'(youtube|youtu|youtube-nocookie)\.(com|be)/'
-        r'(watch\?v=|embed/|v/|.+\?v=)?([^&]{11})')
+        r'(watch\?v=|embed/|v/|shorts/|.+\?v=)?([^&]{11})')
     return bool(re.match(youtube_regex, url))
 
 def extract_video_id(url: str) -> str:
     """從 YouTube URL 中提取影片 ID 和播放清單索引"""
     # 提取影片 ID
-    v_match = re.search(r'[?&]v=([^&]+)', url)
     video_id = None
-    if v_match:
-        video_id = v_match.group(1)[:11]
+    
+    # 處理 Shorts URL
+    shorts_match = re.search(r'shorts/([^/?]+)', url)
+    if shorts_match:
+        video_id = shorts_match.group(1)[:11]
     else:
-        path_match = re.search(r'(?:embed/|v/|.+\?v=)?([^&]{11})', url)
-        if path_match:
-            video_id = path_match.group(1)
+        # 處理標準 YouTube URL
+        v_match = re.search(r'[?&]v=([^&]+)', url)
+        if v_match:
+            video_id = v_match.group(1)[:11]
+        else:
+            path_match = re.search(r'(?:embed/|v/|.+\?v=)?([^&]{11})', url)
+            if path_match:
+                video_id = path_match.group(1)
     
     # 提取播放清單索引
     index_match = re.search(r'index=(\d+)', url)
@@ -77,7 +84,7 @@ def download_youtube(url: str, output_dir: str, resolution: str = "480p", max_re
     
     # 設定 yt-dlp 選項
     ydl_opts = {
-        'format': f'bestvideo[height<={resolution[:-1]}][ext=mp4]+bestaudio[ext=m4a]/best[height<={resolution[:-1]}][ext=mp4]/best[ext=mp4]',
+        'format': f'bestvideo[height<={resolution[:-1]}][ext=mp4]+bestaudio[ext=m4a]/best[height<={resolution[:-1]}][ext=mp4]/best[ext=mp4]/best',  # 增加更多格式選項
         'outtmpl': output_path,
         'quiet': False,
         'no_warnings': True,
@@ -97,7 +104,13 @@ def download_youtube(url: str, output_dir: str, resolution: str = "480p", max_re
         'write_all_thumbnails': False,
         'writecomments': False,
         'getcomments': False,
-        'writethumbnail': False
+        'writethumbnail': False,
+        'force_generic_extractor': False,  # 不強制使用通用提取器
+        'extractor_args': {'youtube:player_client': ['android'], 'youtube:player_skip': ['webpage', 'configs', 'js']},  # 使用 Android 客戶端
+        'cookiesfrombrowser': None,  # 不使用瀏覽器 cookie
+        'geo_bypass': True,  # 繞過地理限制
+        'geo_bypass_country': 'US',  # 使用美國 IP
+        'extractor_retries': 5,  # 增加提取器重試次數
     }
     
     try:
