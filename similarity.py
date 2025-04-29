@@ -3,7 +3,6 @@ from image_processor import video_similarity
 from text_processor import text_similarity
 from logger import logger
 from typing import List, Dict, Union
-from gpu_utils import gpu_manager
 import os
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np

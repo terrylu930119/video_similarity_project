@@ -4,7 +4,7 @@ import sys
 import traceback
 import signal
 import shutil
-from downloader import download_youtube
+from downloader import download_video
 from audio_processor import extract_audio
 from text_processor import transcribe_audio
 from similarity import calculate_overall_similarity, display_similarity_results
@@ -50,7 +50,7 @@ def check_files_exist(file_paths: list) -> bool:
             return False
     return True
 
-def process_video(video_path: str, output_dir: str, time_interval: float, video_url: str = None) -> tuple:
+def process_video(video_path: str, output_dir: str, time_interval: float, video_url: str = None, use_silence_detection: bool = True, use_source_separation: bool = True) -> tuple:
     """處理單個影片，返回音訊路徑、轉錄文本、幀列表和視頻時長"""
     if not check_file_exists(video_path):
         raise FileNotFoundError(f"影片檔案不存在: {video_path}")
@@ -67,7 +67,14 @@ def process_video(video_path: str, output_dir: str, time_interval: float, video_
         raise FileNotFoundError(f"音訊檔案不存在: {audio_path}")
     
     # 轉錄音訊（如果有提供影片 URL，會先嘗試提取字幕）
-    transcript = transcribe_audio(audio_path, video_url, output_dir)
+    # 注意：transcribe_audio 函數會自動進行人聲分離
+    transcript = transcribe_audio(
+        audio_path, 
+        video_url, 
+        output_dir, 
+        use_silence_detection=use_silence_detection,
+        use_source_separation=use_source_separation
+    )
     if not transcript:
         logger.warning(f"無法獲取轉錄文本，將使用空文本: {video_path}")
         transcript = ""
@@ -127,12 +134,14 @@ def main():
             logger.warning("GPU 加速不可用，將使用 CPU 進行處理")
         
         # 設定參數
-        reference_link = "https://www.youtube.com/watch?v=EpGuPUW4w8o&list=RDEpGuPUW4w8o&index=2"
-        comparison_links = [
-            "https://www.youtube.com/watch?v=0PGfVrLeXUU"
+        reference_link = "https://www.youtube.com/watch?v=qik465x27AI"
+        comparison_links = [ 
+            "https://www.youtube.com/watch?v=qik465x27AI",  
+            "https://www.bilibili.com/video/BV1Z7LHz5EVt/?spm_id_from=333.337.search-card.all.click&vd_source=6652d02982a20ea968442207129231f8",
+
         ]
-        time_interval = 2.0  # 每2秒提取一幀
-        resolution = "480p"
+        time_interval = 1.0  # 每2秒提取一幀
+        resolution = "720p"
         output_dir = "downloads"
         
         try:
@@ -145,7 +154,8 @@ def main():
             
             # 處理參考視頻
             logger.info(f"下載參考視頻: {reference_link}")
-            ref_video_path = download_youtube(reference_link, output_dir, resolution)
+            # 使用通用的下載函數，支援各種網站
+            ref_video_path = download_video(reference_link, output_dir, resolution)
             ref_audio_path, ref_transcript, ref_frames, ref_duration = process_video(
                 ref_video_path, 
                 output_dir, 
@@ -179,8 +189,8 @@ def main():
                         comp_frames = processed_videos[link]["frames"]
                         comp_duration = processed_videos[link]["duration"]
                     else:
-                        # 下載並處理新視頻
-                        comp_video_path = download_youtube(link, output_dir, resolution)
+                        # 下載並處理新視頻，使用通用的下載函數
+                        comp_video_path = download_video(link, output_dir, resolution)
                         comp_audio_path, comp_transcript, comp_frames, comp_duration = process_video(
                             comp_video_path, 
                             output_dir, 

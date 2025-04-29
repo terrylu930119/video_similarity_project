@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 import soundfile as sf
 from math import ceil
 import torchaudio
+from downloader import generate_safe_filename
+import gc
 
 # 全域模型變數
 _whisper_model = None
@@ -50,36 +52,53 @@ def get_sentence_transformer():
     return _sentence_transformer
 
 def get_subtitle_language(filename: str) -> str:
-    """從字幕文件名中提取語言代碼"""
-    # 文件名格式：videoId_index.language.vtt
-    parts = filename.split('.')
-    if len(parts) >= 3:
-        return parts[-2]  # 返回倒數第二個部分（語言代碼）
-    return ""
+    """
+    從字幕文件名中提取語言代碼
+    
+    參數:
+        filename: 字幕文件名
+    
+    返回:
+        語言代碼，如果無法提取則返回空字符串
+    """
+    try:
+        # 從文件名中提取語言代碼
+        # 格式：safe_filename.language.vtt
+        parts = filename.split('.')
+        if len(parts) >= 3:
+            return parts[-2]  # 返回倒數第二個部分（語言代碼）
+        return ""
+    except Exception as e:
+        logger.error(f"從文件名提取語言代碼時出錯: {str(e)}")
+        return ""
 
-def get_preferred_subtitle(subtitle_files: list, video_id: str) -> str:
+def get_preferred_subtitle(subtitle_files: list, safe_filename: str) -> str:
     """
-    根據優先順序選擇字幕文件
-    優先順序：繁體中文 > 簡體中文 > 中文 > 英文 > 其他
+    根據語言優先順序選擇最適合的字幕文件
+    
+    參數:
+        subtitle_files: 字幕文件列表
+        safe_filename: 安全的檔案名稱
+    
+    返回:
+        選擇的字幕文件名，如果沒有合適的字幕則返回空字符串
     """
-    language_priority = {
-        'zh': 2,       # 中文（未指定）
-        'en': 3,       # 英文
-        'ja':1         # 日文
-    }
+    # 語言優先順序
+    language_priority = ['zh-Hant', 'zh-HK', 'zh-TW', 'zh', 'en', 'en-US', 'en-GB']
     
-    # 過濾出屬於當前影片的字幕文件
-    video_subtitles = [f for f in subtitle_files if f.startswith(video_id)]
+    # 首先嘗試找到完全匹配的文件名
+    exact_matches = [f for f in subtitle_files if f.startswith(safe_filename)]
+    if exact_matches:
+        subtitle_files = exact_matches
     
-    # 將字幕文件按語言優先級排序
-    sorted_files = []
-    for file in video_subtitles:
-        lang = get_subtitle_language(file)
-        priority = language_priority.get(lang, 999)  # 其他語言優先級最低
-        sorted_files.append((priority, file))
+    # 按優先順序檢查語言
+    for lang in language_priority:
+        for file in subtitle_files:
+            if lang in file:
+                return file
     
-    sorted_files.sort()  # 按優先級排序
-    return sorted_files[0][1] if sorted_files else ""
+    # 如果沒有找到優先語言，返回第一個可用的字幕
+    return subtitle_files[0] if subtitle_files else ""
 
 def extract_video_id_from_url(url: str) -> str:
     """從 YouTube URL 中提取影片 ID 和播放清單索引"""
@@ -114,21 +133,18 @@ def extract_subtitles(video_url: str, output_dir: str) -> str:
     從已下載的字幕文件中讀取字幕
     
     參數:
-        video_url: YouTube 影片 URL
+        video_url: 影片 URL
         output_dir: 輸出目錄
     
     返回:
         字幕文本，如果沒有字幕則返回空字符串
     """
     try:
-        # 從 URL 中提取影片 ID
-        video_id = extract_video_id_from_url(video_url)
-        if not video_id:
-            logger.error("無法從 URL 提取影片 ID")
-            return ""
+        # 使用與下載器相同的檔案命名規則
+        safe_filename = generate_safe_filename(video_url)
             
         # 檢查字幕文件
-        subtitle_files = [f for f in os.listdir(output_dir) if f.startswith(video_id) and f.endswith('.vtt')]
+        subtitle_files = [f for f in os.listdir(output_dir) if f.startswith(safe_filename) and f.endswith('.vtt')]
         
         if not subtitle_files:
             logger.info("未找到字幕文件")
@@ -139,7 +155,7 @@ def extract_subtitles(video_url: str, output_dir: str) -> str:
         logger.info(f"可用的字幕語言: {', '.join(available_languages)}")
         
         # 選擇優先語言的字幕
-        preferred_subtitle = get_preferred_subtitle(subtitle_files, video_id)
+        preferred_subtitle = get_preferred_subtitle(subtitle_files, safe_filename)
         if not preferred_subtitle:
             logger.info("未找到合適的字幕文件")
             return ""
@@ -287,66 +303,126 @@ def post_process_transcript(text: str, language: str = None) -> str:
     
     return text.strip()
 
-def split_audio_for_transcription(audio_path: str, segment_duration: int = 180) -> list:
+def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, overlap: int = 2, use_silence_detection: bool = True, merge_gap_threshold: int = 1000, min_segment_duration: int = 3) -> list:
     """
-    將音頻分割成小片段用於轉錄
+    將音頻分割成小片段用於轉錄，支持重疊處理和靜音斷點切割
     
     參數:
         audio_path: 音頻檔案路徑
-        segment_duration: 每個片段的持續時間（秒），預設3分鐘
+        segment_duration: 每個片段的持續時間（秒）
+        overlap: 重疊時間（秒）
+        use_silence_detection: 是否使用靜音斷點切割
+        merge_gap_threshold: 合併靜音段的閾值（毫秒）
+        min_segment_duration: 最小片段時長（秒）
     """
     try:
-        # 使用 torchaudio 載入音頻
-        waveform, sr = torchaudio.load(audio_path)
-        if waveform.size(0) > 1:  # 如果是多聲道，轉換為單聲道
-            waveform = waveform.mean(dim=0, keepdim=True)
+        # 檢查音頻文件是否存在
+        if not os.path.exists(audio_path):
+            logger.error(f"音頻文件不存在: {audio_path}")
+            return []
             
-        duration = waveform.size(1) / sr
-        logger.info(f"音頻總長度: {duration:.2f} 秒")
-        
-        # 計算分段
-        samples_per_segment = segment_duration * sr
-        num_segments = ceil(waveform.size(1) / samples_per_segment)
-        logger.info(f"將分割成 {num_segments} 個片段，每段 {segment_duration} 秒")
-        
         # 創建臨時目錄
         temp_dir = os.path.join(os.path.dirname(audio_path), "temp_segments")
         os.makedirs(temp_dir, exist_ok=True)
         
-        def process_segment(i):
-            try:
-                # 計算片段的起始和結束位置
-                start = int(i * samples_per_segment)
-                end = int(min((i + 1) * samples_per_segment, waveform.size(1)))
-                
-                # 提取片段
-                segment = waveform[:, start:end]
-                
-                # 保存片段
-                segment_path = os.path.join(temp_dir, f"segment_{i:03d}.wav")
-                torchaudio.save(segment_path, segment, sr)
-                logger.info(f"已保存片段 {i+1}/{num_segments}")
-                return segment_path
-            except Exception as e:
-                logger.error(f"處理片段 {i+1} 時出錯: {str(e)}")
-                return None
-        
-        # 使用線程池並行處理片段
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            segment_files = list(executor.map(process_segment, range(num_segments)))
-        
-        # 過濾掉失敗的片段
-        valid_segments = [f for f in segment_files if f is not None]
-        
-        if not valid_segments:
-            logger.error("沒有成功生成的音頻片段")
-            return []
+        # 使用 librosa 載入音頻（更節省內存）
+        try:
+            import librosa
+            import soundfile as sf
+            y, sr = librosa.load(audio_path, sr=None, mono=True)
+            duration = len(y) / sr
+            logger.info(f"音頻總長度: {duration:.2f} 秒")
             
-        return valid_segments
-        
+            # 計算分段
+            samples_per_segment = int(segment_duration * sr)
+            overlap_samples = int(overlap * sr)
+            num_segments = ceil((len(y) - overlap_samples) / (samples_per_segment - overlap_samples))
+            
+            def process_segment(i):
+                try:
+                    # 計算片段的起始和結束位置
+                    start = int(i * (samples_per_segment - overlap_samples))
+                    end = int(min(start + samples_per_segment, len(y)))
+                    
+                    # 提取片段
+                    segment = y[start:end]
+                    
+                    # 保存片段
+                    segment_path = os.path.join(temp_dir, f"segment_{i:03d}.wav")
+                    sf.write(segment_path, segment, sr)
+                    logger.info(f"已保存片段 {i+1}/{num_segments}")
+                    return segment_path
+                except Exception as e:
+                    logger.error(f"處理片段 {i+1} 時出錯: {str(e)}")
+                    return None
+            
+            # 根據系統資源動態調整線程數
+            import psutil
+            cpu_count = psutil.cpu_count()
+            max_workers = min(cpu_count - 1, 4)  # 保留一個CPU核心給系統
+            
+            # 使用線程池並行處理片段
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                segment_files = list(executor.map(process_segment, range(num_segments)))
+            
+            # 過濾掉失敗的片段
+            valid_segments = [f for f in segment_files if f is not None]
+            
+            if not valid_segments:
+                logger.error("沒有成功生成的音頻片段")
+                return []
+                
+            return valid_segments
+            
+        except ImportError:
+            logger.warning("librosa 不可用，嘗試使用 torchaudio...")
+            # 如果 librosa 不可用，回退到 torchaudio
+            waveform, sr = torchaudio.load(audio_path)
+            if waveform.size(0) > 1:  # 如果是多聲道，轉換為單聲道
+                waveform = waveform.mean(dim=0, keepdim=True)
+                
+            duration = waveform.size(1) / sr
+            logger.info(f"音頻總長度: {duration:.2f} 秒")
+            
+            # 計算分段
+            samples_per_segment = segment_duration * sr
+            overlap_samples = overlap * sr
+            num_segments = ceil((waveform.size(1) - overlap_samples) / (samples_per_segment - overlap_samples))
+            
+            def process_segment(i):
+                try:
+                    start = int(i * (samples_per_segment - overlap_samples))
+                    end = int(min(start + samples_per_segment, waveform.size(1)))
+                    segment = waveform[:, start:end]
+                    segment_path = os.path.join(temp_dir, f"segment_{i:03d}.wav")
+                    torchaudio.save(segment_path, segment, sr)
+                    logger.info(f"已保存片段 {i+1}/{num_segments}")
+                    return segment_path
+                except Exception as e:
+                    logger.error(f"處理片段 {i+1} 時出錯: {str(e)}")
+                    return None
+            
+            # 使用線程池並行處理片段
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                segment_files = list(executor.map(process_segment, range(num_segments)))
+            
+            # 過濾掉失敗的片段
+            valid_segments = [f for f in segment_files if f is not None]
+            
+            if not valid_segments:
+                logger.error("沒有成功生成的音頻片段")
+                return []
+                
+            return valid_segments
+            
     except Exception as e:
         logger.error(f"分割音頻時出錯: {str(e)}")
         return []
+    finally:
+        # 清理內存
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()  # 強制垃圾回收
 
 def merge_transcripts(transcripts: list) -> str:
     """
@@ -354,12 +430,22 @@ def merge_transcripts(transcripts: list) -> str:
     """
     return " ".join(filter(None, transcripts))
 
-def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = None, language: str = None) -> str:
+def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = None, language: str = None, use_silence_detection: bool = True, merge_gap_threshold: int = 1000, min_segment_duration: int = 3, use_source_separation: bool = True) -> str:
     """
     轉錄音訊，優先順序：
     1. 檢查已存在的轉錄文件
     2. 檢查字幕文件（如果提供了影片 URL）
     3. 進行語音辨識
+    
+    參數:
+        audio_path: 音頻文件路徑
+        video_url: 影片 URL，用於提取字幕
+        output_dir: 輸出目錄
+        language: 語言代碼
+        use_silence_detection: 是否使用靜音斷點切割
+        merge_gap_threshold: 合併靜音段的閾值（毫秒）
+        min_segment_duration: 最小片段時長（秒）
+        use_source_separation: 是否使用音源分離
     """
     try:
         # 1. 首先檢查是否已有轉錄文件
@@ -405,9 +491,16 @@ def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = N
         # 獲取模型
         model = get_whisper_model()
         
-        # 分割音頻（使用較短的片段）
+        # 分割音頻（使用靜音斷點切割或固定長度切割）
         logger.info("開始分割音頻...")
-        segment_files = split_audio_for_transcription(audio_path, segment_duration=180)  # 3分鐘一段
+        segment_files = split_audio_for_transcription(
+            audio_path, 
+            segment_duration=120, 
+            overlap=2, 
+            use_silence_detection=use_silence_detection,
+            merge_gap_threshold=merge_gap_threshold,
+            min_segment_duration=min_segment_duration
+        )
         if not segment_files:
             raise Exception("音頻分割失敗")
         

@@ -15,6 +15,8 @@ import psutil
 import gc
 import hashlib
 import sys
+from pydub import AudioSegment
+from pydub.silence import detect_nonsilent
 
 # 修改全局緩存為 LRU 緩存
 _feature_cache = lru_cache(maxsize=10)  # 限制只緩存最近使用的10個檔案的特徵
@@ -424,3 +426,20 @@ def extract_audio(video_path: str) -> str:
     except Exception as e:
         logger.error(f"音訊提取失敗: {str(e)}")
         raise
+
+def detect_silence_segments(audio_path: str) -> list:
+    """
+    检测音频中的静音段，用于优化切割点
+    """
+    try:
+        audio = AudioSegment.from_wav(audio_path)
+        nonsilent_ranges = detect_nonsilent(
+            audio,
+            min_silence_len=300,  # 最小静音长度（毫秒）
+            silence_thresh = audio.dBFS - 14 # 静音阈值（dB）
+        )
+        
+        return nonsilent_ranges
+    except Exception as e:
+        logger.error(f"检测静音段时出错: {str(e)}")
+        return []

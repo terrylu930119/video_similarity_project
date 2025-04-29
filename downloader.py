@@ -3,47 +3,57 @@ import time
 from logger import logger
 import re
 import yt_dlp
+import hashlib
+import urllib.parse
 
-def is_valid_youtube_url(url: str) -> bool:
-    """檢查 URL 是否為有效的 YouTube 連結"""
-    youtube_regex = (
-        r'(https?://)?(www\.)?'
-        r'(youtube|youtu|youtube-nocookie)\.(com|be)/'
-        r'(watch\?v=|embed/|v/|shorts/|.+\?v=)?([^&]{11})')
-    return bool(re.match(youtube_regex, url))
+def is_valid_url(url: str) -> bool:
+    """檢查 URL 是否為有效的網址"""
+    try:
+        result = urllib.parse.urlparse(url)
+        return all([result.scheme, result.netloc])
+    except:
+        return False
 
-def extract_video_id(url: str) -> str:
-    """從 YouTube URL 中提取影片 ID 和播放清單索引"""
-    # 提取影片 ID
-    video_id = None
-    
-    # 處理 Shorts URL
-    shorts_match = re.search(r'shorts/([^/?]+)', url)
-    if shorts_match:
-        video_id = shorts_match.group(1)[:11]
-    else:
-        # 處理標準 YouTube URL
-        v_match = re.search(r'[?&]v=([^&]+)', url)
-        if v_match:
-            video_id = v_match.group(1)[:11]
-        else:
-            path_match = re.search(r'(?:embed/|v/|.+\?v=)?([^&]{11})', url)
-            if path_match:
-                video_id = path_match.group(1)
-    
-    # 提取播放清單索引
-    index_match = re.search(r'index=(\d+)', url)
-    playlist_index = index_match.group(1) if index_match else ""
-    
-    # 組合檔案名稱：videoId_index
-    return f"{video_id}_{playlist_index}" if playlist_index else video_id
+import hashlib
+import urllib.parse
+import re
 
-def download_youtube(url: str, output_dir: str, resolution: str = "480p", max_retries: int = 3) -> str:
+def generate_safe_filename(url: str) -> str:
     """
-    使用 yt-dlp 下載 YouTube 影片
+    從 URL 生成安全且具語意的檔案名稱。
+    
+    檔名格式：<有意義的部分>_<URL MD5 雜湊值>
+    - 若無有意義部分，僅回傳雜湊值
+    - 自動避開純數字路徑，避免命名無意義
+    - 清除非法檔名字符，確保跨平台安全
+    """
+    # 生成雜湊值（保底）
+    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
+    
+    # 解析 URL，取路徑最後一段當作可能的語意部分
+    parsed_url = urllib.parse.urlparse(url)
+    path_parts = [p for p in parsed_url.path.strip('/').split('/') if p]
+
+    meaningful_part = ""
+    for part in reversed(path_parts):
+        if not part.isdigit() and re.search(r'[a-zA-Z]', part):  # 避免純數字或無語意字串
+            meaningful_part = part
+            break
+
+    if meaningful_part:
+        # 清理掉奇怪字元，只留字母、數字、_ 和 -
+        safe_part = re.sub(r'[^\w\-]', '_', meaningful_part)
+        return f"{safe_part}_{url_hash}"
+    else:
+        return url_hash
+
+
+def download_video(url: str, output_dir: str, resolution: str = "480p", max_retries: int = 3) -> str:
+    """
+    使用 yt-dlp 下載影片，支援各種網站
     
     參數:
-        url: YouTube 影片完整 URL
+        url: 影片完整 URL
         output_dir: 輸出目錄
         resolution: 影片解析度，預設為 "480p"
         max_retries: 最大重試次數
@@ -52,13 +62,11 @@ def download_youtube(url: str, output_dir: str, resolution: str = "480p", max_re
         下載的影片路徑
     """
     # 驗證 URL 格式
-    if not is_valid_youtube_url(url):
-        raise ValueError(f"無效的 YouTube URL: {url}")
+    if not is_valid_url(url):
+        raise ValueError(f"無效的 URL: {url}")
     
-    # 提取影片 ID（包含播放清單索引）
-    video_id = extract_video_id(url)
-    if not video_id:
-        raise ValueError(f"無法從 URL 中提取影片 ID: {url}")
+    # 生成安全的檔案名稱
+    safe_filename = generate_safe_filename(url)
     
     # 建立輸出目錄
     try:
@@ -70,7 +78,7 @@ def download_youtube(url: str, output_dir: str, resolution: str = "480p", max_re
         raise
     
     # 建立輸出檔案路徑
-    output_path = os.path.join(output_dir, f"{video_id}.mp4")
+    output_path = os.path.join(output_dir, f"{safe_filename}.mp4")
     
     # 檢查文件是否已存在且大小正常
     if os.path.exists(output_path):
@@ -106,8 +114,6 @@ def download_youtube(url: str, output_dir: str, resolution: str = "480p", max_re
         'getcomments': False,
         'writethumbnail': False,
         'force_generic_extractor': False,  # 不強制使用通用提取器
-        'extractor_args': {'youtube:player_client': ['android'], 'youtube:player_skip': ['webpage', 'configs', 'js']},  # 使用 Android 客戶端
-        'cookiesfrombrowser': None,  # 不使用瀏覽器 cookie
         'geo_bypass': True,  # 繞過地理限制
         'geo_bypass_country': 'US',  # 使用美國 IP
         'extractor_retries': 5,  # 增加提取器重試次數
