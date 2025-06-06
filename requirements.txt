@@ -1,0 +1,32 @@
+# 基本依賴
+numpy>=1.21.0
+opencv-python>=4.5.0
+opencv-contrib-python>=4.5.0
+ffmpeg-python>=0.2.0
+pytube>=12.0.0
+scikit-image>=0.18.0
+imagehash>=4.2.0
+Pillow>=8.0.0
+scikit-learn>=1.0.0
+
+# GPU 加速相關依賴
+--find-links https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+torchaudio==2.5.1+cu121
+huggingface-hub>=0.16.4
+sentence-transformers>=2.2.2
+openai-whisper>=20230314
+
+# 視頻處理相關依賴
+scenedetect>=0.6.0
+
+# 音頻處理相關依賴
+librosa>=0.8.0
+soundfile>=0.10.0
+chromaprint>=0.5.0 
+
+# 其他依賴
+yt-dlp>=2024.05.27
+openl3>=0.4.2
+psutil>=6.0.0
