@@ -1,15 +1,14 @@
-
-
 import os
 import gc
 import sys
 import time
-import openl3
 import psutil
 import ffmpeg
 import librosa
 import hashlib
 import numpy as np
+import torch
+import torchaudio
 from pydub import AudioSegment
 from utils.logger import logger
 from functools import lru_cache
@@ -19,6 +18,10 @@ from scipy.spatial.distance import euclidean
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.metrics.pairwise import cosine_similarity
 from typing import Dict, Optional, Generator, Tuple, Any
+
+# 檢查 CUDA 可用性
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+logger.info(f"使用設備: {device}")
 
 # 修改全局緩存為 LRU 緩存
 _feature_cache = lru_cache(maxsize=10)  # 限制只緩存最近使用的10個檔案的特徵
@@ -57,23 +60,40 @@ def load_audio(audio_path: str) -> Generator[Tuple[np.ndarray, int], None, None]
         logger.error(f"載入音頻文件失敗 {audio_path}: {str(e)}")
         return None
 
-def extract_openl3_embedding(audio_path: str, embedding_size: int = 512) -> Optional[np.ndarray]:
-    """以較低記憶體佔用方式使用 OpenL3 提取音頻嵌入向量"""
+def extract_audio_features(audio_path: str, embedding_size: int = 512) -> Optional[np.ndarray]:
+    """使用 PyTorch 提取音頻特徵"""
     try:
-        embeddings = []
-        for y_chunk, sr in load_audio(audio_path):
-            if y_chunk is None:
-                continue
-            emb, _ = openl3.get_audio_embedding(y_chunk, sr, embedding_size=embedding_size)
-            # 對每個音頻塊的所有時間步取平均以減少資料量
-            embeddings.append(np.mean(emb, axis=0))
-
-        if not embeddings:
-            return None
-
-        return np.mean(np.vstack(embeddings), axis=0)
+        # 載入音頻
+        waveform, sample_rate = torchaudio.load(audio_path)
+        waveform = waveform.to(device)
+        
+        # 使用梅爾頻譜圖作為特徵
+        mel_spec = torchaudio.transforms.MelSpectrogram(
+            sample_rate=sample_rate,
+            n_fft=2048,
+            hop_length=512,
+            n_mels=128
+        ).to(device)
+        
+        # 計算梅爾頻譜圖
+        mel_features = mel_spec(waveform)
+        
+        # 使用平均池化來獲取固定大小的特徵向量
+        features = torch.mean(mel_features, dim=2)  # 在時間維度上平均
+        
+        # 轉換為 numpy 數組
+        features = features.cpu().numpy()
+        
+        # 如果特徵維度太大，使用 PCA 降維
+        if features.shape[1] > embedding_size:
+            from sklearn.decomposition import PCA
+            pca = PCA(n_components=embedding_size)
+            features = pca.fit_transform(features.T).T
+        
+        return features[0]  # 返回第一個通道的特徵
+        
     except Exception as e:
-        logger.error(f"使用 OpenL3 提取音頻嵌入失敗 {audio_path}: {str(e)}")
+        logger.error(f"提取音頻特徵失敗 {audio_path}: {str(e)}")
         return None
 
 def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
@@ -123,6 +143,9 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
                 hop_length=hop_length
             )
             
+            # 計算 tempo
+            tempo = librosa.beat.tempo(onset_envelope=onset_env, sr=sr)[0]
+            
             def get_stats(feature):
                 if len(feature.shape) == 1:
                     feature = feature.reshape(1, -1)
@@ -141,7 +164,7 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
                 'mfcc_delta': get_stats(mfcc_delta),
                 'chroma': get_stats(chroma),
                 'onset_env': onset_env.astype(np.float32),
-                'tempo': float(librosa.beat.tempo(onset_envelope=onset_env, sr=sr)[0])
+                'tempo': float(tempo)
             }
 
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -231,29 +254,31 @@ def compute_audio_features(audio_path: str) -> Optional[dict]:
             # 如果中間結果太大，寫入磁碟
             if total_size > 500 * 1024 * 1024:  # 500MB
                 intermediate = combine_features(features_list)
-                cache_features_to_disk(intermediate, cache_dir, f"{file_id}_temp")
+                if intermediate:
+                    cache_features_to_disk(intermediate, cache_dir, f"{file_id}_temp")
                 features_list = []
                 total_size = 0
         
+        if not features_list:
+            logger.error("沒有有效的音頻特徵可供處理")
+            return None
+            
         final_features = combine_features(features_list)
+        if final_features is None:
+            logger.error("合併特徵失敗")
+            return None
+        
+        # 添加深度學習特徵
+        dl_features = extract_audio_features(audio_path)
+        if dl_features is not None:
+            final_features['dl_features'] = dl_features
+        
         cache_features_to_disk(final_features, cache_dir, file_id)
         return final_features
         
     except Exception as e:
         logger.error(f"提取音頻特徵時出錯: {str(e)}")
         return None
-
-def compute_cosine_similarity(embeddings1: np.ndarray, embeddings2: np.ndarray) -> float:
-    similarity = cosine_similarity([embeddings1], [embeddings2])
-    return similarity[0][0]
-
-def compute_euclidean_distance(embeddings1: np.ndarray, embeddings2: np.ndarray) -> float:
-    distance = euclidean(embeddings1, embeddings2)
-    return distance
-
-def compute_dtw_distance(embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-    D, wp = dtw(embedding1, embedding2)
-    return D[-1, -1]
 
 def compute_weighted_similarity(features1: dict, features2: dict) -> float:
     try:
@@ -273,6 +298,10 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
                     break
             elif key == 'tempo':
                 if abs(features1[key] - features2[key]) > 1e-6:
+                    all_equal = False
+                    break
+            elif key == 'dl_features':
+                if not np.array_equal(features1[key], features2[key]):
                     all_equal = False
                     break
             else:
@@ -324,6 +353,13 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
         tempo_sim = 1.0 / (1.0 + tempo_diff / 20.0)  # 調整 tempo 差異的敏感度
         similarities.append(tempo_sim)
         weights.append(1.5)
+
+        # 深度學習特徵的餘弦相似度
+        if 'dl_features' in features1 and 'dl_features' in features2:
+            dl_sim = cosine_similarity([features1['dl_features']], [features2['dl_features']])[0][0]
+            dl_sim = (dl_sim + 1) / 2  # 轉換到 [0,1] 範圍
+            similarities.append(dl_sim)
+            weights.append(2.0)  # 給予深度學習特徵較高權重
 
         # 計算加權平均
         if not similarities:  # 如果沒有有效的相似度計算結果
@@ -438,7 +474,7 @@ def extract_audio(video_path: str) -> str:
 
 def detect_silence_segments(audio_path: str) -> list:
     """
-    检测音频中的静音段，用于优化切割点
+    檢測音頻中的靜音段，用於優化切割點
     """
     try:
         audio = AudioSegment.from_wav(audio_path)
@@ -450,5 +486,5 @@ def detect_silence_segments(audio_path: str) -> list:
         
         return nonsilent_ranges
     except Exception as e:
-        logger.error(f"检测静音段时出错: {str(e)}")
+        logger.error(f"檢測靜音段時出錯: {str(e)}")
         return []
