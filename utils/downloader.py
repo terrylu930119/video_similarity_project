@@ -14,9 +14,6 @@ def is_valid_url(url: str) -> bool:
     except:
         return False
 
-import hashlib
-import urllib.parse
-import re
 
 def generate_safe_filename(url: str) -> str:
     """
