@@ -34,7 +34,6 @@ def get_optimal_chunk_size(file_size: int) -> float:
     else:
         return 60.0  # 較大的分塊
 
-@lru_cache(maxsize=32)
 def load_audio(audio_path: str) -> Generator[Tuple[np.ndarray, int], None, None]:
     file_size = os.path.getsize(audio_path)
     chunk_duration = get_optimal_chunk_size(file_size)
@@ -59,12 +58,20 @@ def load_audio(audio_path: str) -> Generator[Tuple[np.ndarray, int], None, None]
         return None
 
 def extract_openl3_embedding(audio_path: str, embedding_size: int = 512) -> Optional[np.ndarray]:
+    """以較低記憶體佔用方式使用 OpenL3 提取音頻嵌入向量"""
     try:
-        y, sr = load_audio(audio_path)
-        if y is None:
+        embeddings = []
+        for y_chunk, sr in load_audio(audio_path):
+            if y_chunk is None:
+                continue
+            emb, _ = openl3.get_audio_embedding(y_chunk, sr, embedding_size=embedding_size)
+            # 對每個音頻塊的所有時間步取平均以減少資料量
+            embeddings.append(np.mean(emb, axis=0))
+
+        if not embeddings:
             return None
-        emb, ts = openl3.get_audio_embedding(y, sr, embedding_size=embedding_size)
-        return emb
+
+        return np.mean(np.vstack(embeddings), axis=0)
     except Exception as e:
         logger.error(f"使用 OpenL3 提取音頻嵌入失敗 {audio_path}: {str(e)}")
         return None

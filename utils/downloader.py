@@ -14,10 +14,6 @@ def is_valid_url(url: str) -> bool:
     except:
         return False
 
-import hashlib
-import urllib.parse
-import re
-
 def generate_safe_filename(url: str) -> str:
     """
     從 URL 生成安全且具語意的檔案名稱。
@@ -92,7 +88,7 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
     
     # 設定 yt-dlp 選項
     ydl_opts = {
-        'format': f'bestvideo[height<={resolution[:-1]}][ext=mp4]+bestaudio[ext=m4a]/best[height<={resolution[:-1]}][ext=mp4]/best[ext=mp4]/best',  # 增加更多格式選項
+        'format': f'bestvideo[height<={resolution[:-1]}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={resolution[:-1]}]+bestaudio/best[height<={resolution[:-1]}]/best',  # 更靈活的格式選擇
         'outtmpl': output_path,
         'quiet': False,
         'no_warnings': True,
@@ -104,6 +100,7 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
         'subtitlesformat': 'vtt',
         'subtitleslangs': ['all', '-live_chat'],  # 排除 live chat
         'compat_opts': ['no-live-chat'],  # 禁用 live chat
+        'ignoreerrors': True,  # 忽略字幕下載錯誤
         'skip_download': False,
         'writedescription': False,
         'writeinfojson': False,
@@ -117,6 +114,7 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
         'geo_bypass': True,  # 繞過地理限制
         'geo_bypass_country': 'US',  # 使用美國 IP
         'extractor_retries': 5,  # 增加提取器重試次數
+        'format_sort': ['res', 'ext:mp4:m4a', 'size', 'br', 'asr'],  # 添加格式排序選項
     }
     
     try:

@@ -134,10 +134,10 @@ def main():
             logger.warning("GPU 加速不可用，將使用 CPU 進行處理")
         
         # 設定參數
-        reference_link = "https://www.youtube.com/watch?v=ebcpK31YY3g"
-        comparison_links = [ "https://www.youtube.com/watch?v=-aYBLF9OAaI"
+        reference_link = "https://www.bilibili.com/video/BV1Pp7WzqES2/?spm_id_from=333.337.search-card.all.click&vd_source=6652d02982a20ea968442207129231f8"
+        comparison_links = [ "https://www.youtube.com/watch?v=JuiKFLw-0vA"
         ]
-        time_interval = 1.0  # 每2秒提取一幀
+        time_interval = 2.0  # 每2秒提取一幀
         resolution = "720p"
         output_dir = "downloads"
         
