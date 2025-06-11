@@ -1,5 +1,5 @@
-import os
-import gc
+import sys, os
+sys.path.insert(0, os.path.abspath('./panns_inference'))
 import sys
 import time
 import psutil
@@ -18,13 +18,142 @@ from scipy.spatial.distance import euclidean
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.metrics.pairwise import cosine_similarity
 from typing import Dict, Optional, Generator, Tuple, Any
+from panns_inference.models import Cnn14
+from panns_inference.inference import load_audio as pann_load_audio
+from sklearn.decomposition import PCA
 
-# 檢查 CUDA 可用性
+# =============== 全局配置参数 ===============
+# 音频处理参数
+AUDIO_CONFIG = {
+    'sample_rate': 16000,
+    'channels': 1,
+    'audio_bitrate': '192k',
+    'format': 'wav',
+    'codec': 'pcm_s16le'
+}
+
+# 特征提取参数
+FEATURE_CONFIG = {
+    'mfcc': {
+        'n_mfcc': 13,
+        'hop_length': 1024
+    },
+    'mel': {
+        'n_mels': 64,
+        'hop_length': 1024
+    },
+    'chroma': {
+        'n_chroma': 12,
+        'hop_length': 1024
+    }
+}
+
+# 分块处理参数
+CHUNK_CONFIG = {
+    'small_file': 60.0,    # 小文件分块大小（秒）
+    'medium_file': 30.0,   # 中等文件分块大小（秒）
+    'large_file': 15.0,    # 大文件分块大小（秒）
+    'file_size_threshold': {
+        'large': 1024 * 1024 * 1024,  # 1GB
+        'medium': 512 * 1024 * 1024   # 512MB
+    }
+}
+
+# 相似度计算权重
+SIMILARITY_WEIGHTS = {
+    'pann': 2.5,
+    'dl': 2.0,
+    'onset': 2.0,
+    'mfcc': 1.5,
+    'mfcc_delta': 1.2,
+    'chroma': 0.8,
+    'tempo': 1.5
+}
+
+# 内存管理参数
+MEMORY_CONFIG = {
+    'max_memory_percent': 80,
+    'intermediate_cache_size': 500 * 1024 * 1024,  # 500MB
+    'feature_cache_size': 10
+}
+
+# 线程池配置
+THREAD_CONFIG = {
+    'max_workers': {
+        'large_file': 2,
+        'medium_file': 4,
+        'small_file': 1
+    }
+}
+
+# =============== 全局变量初始化 ===============
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 logger.info(f"使用設備: {device}")
 
-# 修改全局緩存為 LRU 緩存
-_feature_cache = lru_cache(maxsize=10)  # 限制只緩存最近使用的10個檔案的特徵
+# 初始化 PANN 模型
+pann_model = None
+
+# 初始化特征缓存
+_feature_cache = lru_cache(maxsize=MEMORY_CONFIG['feature_cache_size'])
+
+# =============== 工具函数 ===============
+def get_optimal_chunk_size(file_size: int) -> float:
+    """根據檔案大小動態調整分塊大小"""
+    if file_size > CHUNK_CONFIG['file_size_threshold']['large']:
+        return CHUNK_CONFIG['large_file']
+    elif file_size > CHUNK_CONFIG['file_size_threshold']['medium']:
+        return CHUNK_CONFIG['medium_file']
+    return CHUNK_CONFIG['small_file']
+
+def get_optimal_workers(file_size: int) -> int:
+    """根據檔案大小和系統資源動態調整工作線程數"""
+    available_memory = psutil.virtual_memory().available
+    cpu_count = os.cpu_count() or 4
+    
+    if file_size > CHUNK_CONFIG['file_size_threshold']['large']:
+        return min(THREAD_CONFIG['max_workers']['large_file'], cpu_count)
+    elif available_memory > 8 * 1024 * 1024 * 1024:  # 8GB可用記憶體
+        return min(THREAD_CONFIG['max_workers']['medium_file'], cpu_count)
+    return THREAD_CONFIG['max_workers']['small_file']
+
+def check_memory_usage():
+    """檢查記憶體使用情況，必要時進行垃圾回收"""
+    if psutil.virtual_memory().percent > MEMORY_CONFIG['max_memory_percent']:
+        import gc
+        gc.collect()
+        time.sleep(1)
+        return True
+    return False
+
+def get_pann_model():
+    """獲取或初始化 PANN 模型"""
+    global pann_model
+    if pann_model is None:
+        pann_model = Cnn14(sample_rate=16000, window_size=1024, hop_size=320, mel_bins=64, fmin=50, fmax=14000)
+        pann_model = pann_model.to(device)
+        pann_model.eval()
+    return pann_model
+
+def extract_pann_features(audio_path: str) -> Optional[np.ndarray]:
+    """使用 PANN 提取音頻特徵"""
+    try:
+        # 載入音頻
+        waveform, sr = pann_load_audio(audio_path, target_sr=32000)
+        waveform = torch.from_numpy(waveform).to(device)
+        
+        # 獲取模型
+        model = get_pann_model()
+        
+        # 提取特徵
+        with torch.no_grad():
+            features = model(waveform.unsqueeze(0))
+            features = features.cpu().numpy()
+        
+        return features.squeeze()[:2048]  # 保證回傳是 1D 向量
+        
+    except Exception as e:
+        logger.error(f"PANN 特徵提取失敗 {audio_path}: {str(e)}")
+        return None
 
 @lru_cache(maxsize=32)
 def get_optimal_chunk_size(file_size: int) -> float:
@@ -67,7 +196,6 @@ def normalize_waveform(waveform: torch.Tensor) -> torch.Tensor:
     waveform = waveform / (waveform.norm(p=2) + 1e-9)
     return waveform
 
-
 def extract_audio_features(audio_path: str, embedding_size: int = 512) -> Optional[np.ndarray]:
     """使用 PyTorch 提取音頻特徵"""
     try:
@@ -80,8 +208,8 @@ def extract_audio_features(audio_path: str, embedding_size: int = 512) -> Option
         mel_spec = torchaudio.transforms.MelSpectrogram(
             sample_rate=sample_rate,
             n_fft=2048,
-            hop_length=512,
-            n_mels=128
+            hop_length=FEATURE_CONFIG['mel']['hop_length'],
+            n_mels=FEATURE_CONFIG['mel']['n_mels']
         ).to(device)
         
         # 計算梅爾頻譜圖
@@ -95,7 +223,6 @@ def extract_audio_features(audio_path: str, embedding_size: int = 512) -> Option
         
         # 如果特徵維度太大，使用 PCA 降維
         if features.shape[1] > embedding_size:
-            from sklearn.decomposition import PCA
             pca = PCA(n_components=embedding_size)
             features = pca.fit_transform(features.T).T
         
@@ -106,12 +233,8 @@ def extract_audio_features(audio_path: str, embedding_size: int = 512) -> Option
         return None
 
 def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
-    # 減少特徵維度
-    n_mfcc = 13  # 從20減少到13
-    hop_length = 1024  # 增加 hop_length 減少計算量
-    
     try:
-        segment_length = sr * 5  # 從10秒減少到5秒
+        segment_length = sr * 5  # 5秒一段
         segments = [audio_data[i:i + segment_length] for i in range(0, len(audio_data), segment_length)]
 
         def extract_segment_features(segment):
@@ -122,34 +245,34 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
             mel_spec = librosa.feature.melspectrogram(
                 y=segment, 
                 sr=sr,
-                n_mels=64,  # 減少梅爾頻帶數量
-                hop_length=hop_length
+                n_mels=FEATURE_CONFIG['mel']['n_mels'],
+                hop_length=FEATURE_CONFIG['mel']['hop_length']
             )
             
-            # 只計算必要的特徵
+            # 計算 MFCC
             mfcc = librosa.feature.mfcc(
                 y=segment, 
                 sr=sr, 
-                n_mfcc=n_mfcc,
-                hop_length=hop_length
+                n_mfcc=FEATURE_CONFIG['mfcc']['n_mfcc'],
+                hop_length=FEATURE_CONFIG['mfcc']['hop_length']
             )
             
-            # 只計算一階差分
+            # 計算 MFCC delta
             mfcc_delta = librosa.feature.delta(mfcc)
             
-            # 使用較低維度的色度特徵
+            # 計算色度特徵
             chroma = librosa.feature.chroma_stft(
                 y=segment, 
                 sr=sr,
-                hop_length=hop_length,
-                n_chroma=12
+                hop_length=FEATURE_CONFIG['chroma']['hop_length'],
+                n_chroma=FEATURE_CONFIG['chroma']['n_chroma']
             )
             
-            # 使用較大的 hop_length 計算節奏特徵
+            # 計算節奏特徵
             onset_env = librosa.onset.onset_strength(
                 y=segment, 
                 sr=sr,
-                hop_length=hop_length
+                hop_length=FEATURE_CONFIG['mel']['hop_length']
             )
             
             # 計算 tempo
@@ -165,7 +288,6 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
                     'min': np.min(feature, axis=1),
                     'median': np.median(feature, axis=1)
                 }
-                # 確保所有統計量具有相同的形狀
                 return {k: np.array(v, dtype=np.float32) for k, v in stats.items()}
             
             return {
@@ -189,13 +311,10 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
         combined_features = {}
         for key in segment_features[0].keys():
             if key == 'onset_env':
-                # 對於時間序列特徵，保留完整序列
                 combined_features[key] = np.concatenate([f[key] for f in segment_features])
             elif key == 'tempo':
-                # 對於單一數值特徵，取平均
                 combined_features[key] = float(np.mean([f[key] for f in segment_features]))
             else:
-                # 對於統計特徵，分別合併各個統計量
                 combined_features[key] = {
                     stat: np.mean([f[key][stat] for f in segment_features], axis=0).astype(np.float32)
                     for stat in segment_features[0][key].keys()
@@ -209,15 +328,14 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
 def cache_features_to_disk(features: dict, cache_dir: str, file_id: str):
     """將特徵暫存到磁碟"""
     cache_path = os.path.join(cache_dir, f"{file_id}_features.npz")
-    # 確保所有特徵都被正確轉換為可序列化的格式
     processed_features = {}
     for k, v in features.items():
         if isinstance(v, dict):
-            processed_features[k] = np.array(v)  # 將字典轉換為對象數組
+            processed_features[k] = np.array(v)
         elif isinstance(v, (float, int)):
             processed_features[k] = np.array(v)
         else:
-            processed_features[k] = v  # 保持數組不變
+            processed_features[k] = v
     np.savez_compressed(cache_path, **processed_features)
     return cache_path
 
@@ -228,71 +346,17 @@ def load_cached_features(cache_path: str) -> dict:
         for k in data.files:
             if isinstance(data[k], np.ndarray):
                 if data[k].dtype == np.dtype('O'):
-                    features[k] = data[k].item()  # 將對象數組轉換回字典
+                    features[k] = data[k].item()
                 else:
-                    features[k] = data[k]  # 保持普通數組不變
+                    features[k] = data[k]
             else:
                 features[k] = data[k]
         return features
 
-def compute_audio_features(audio_path: str) -> Optional[dict]:
-    try:
-        cache_dir = os.path.join(os.path.dirname(audio_path), ".cache")
-        os.makedirs(cache_dir, exist_ok=True)
-        file_id = hashlib.md5(audio_path.encode()).hexdigest()
-        cache_path = os.path.join(cache_dir, f"{file_id}_features.npz")
-        
-        # 檢查緩存
-        if os.path.exists(cache_path):
-            return load_cached_features(cache_path)
-            
-        def process_chunks():
-            for y_chunk, sr in load_audio(audio_path):
-                chunk_features = parallel_feature_extraction(y_chunk, sr)
-                if chunk_features:
-                    yield chunk_features
-                gc.collect()
-            
-        features_list = []
-        total_size = 0
-        
-        for chunk_feature in process_chunks():
-            features_list.append(chunk_feature)
-            total_size += sys.getsizeof(chunk_feature)
-            
-            # 如果中間結果太大，寫入磁碟
-            if total_size > 500 * 1024 * 1024:  # 500MB
-                intermediate = combine_features(features_list)
-                if intermediate:
-                    cache_features_to_disk(intermediate, cache_dir, f"{file_id}_temp")
-                features_list = []
-                total_size = 0
-        
-        if not features_list:
-            logger.error("沒有有效的音頻特徵可供處理")
-            return None
-            
-        final_features = combine_features(features_list)
-        if final_features is None:
-            logger.error("合併特徵失敗")
-            return None
-        
-        # 添加深度學習特徵
-        dl_features = extract_audio_features(audio_path)
-        if dl_features is not None:
-            final_features['dl_features'] = dl_features
-        
-        cache_features_to_disk(final_features, cache_dir, file_id)
-        return final_features
-        
-    except Exception as e:
-        logger.error(f"提取音頻特徵時出錯: {str(e)}")
-        return None
-
 def compute_weighted_similarity(features1: dict, features2: dict) -> float:
     try:
         # 首先檢查是否為完全相同的特徵
-        if features1 is features2:  # 如果是同一個對象引用
+        if features1 is features2:
             return 1.0
 
         # 檢查所有特徵是否完全相同
@@ -309,7 +373,7 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
                 if abs(features1[key] - features2[key]) > 1e-6:
                     all_equal = False
                     break
-            elif key == 'dl_features':
+            elif key in ['dl_features', 'pann_features']:
                 if not np.array_equal(features1[key], features2[key]):
                     all_equal = False
                     break
@@ -327,17 +391,15 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
 
         # DTW 距離計算（用於時間序列特徵）
         onset_dtw = dtw(features1['onset_env'], features2['onset_env'])[0][-1, -1]
-        # 正規化 DTW 距離
         onset_sim = 1.0 / (1.0 + onset_dtw / len(features1['onset_env']))
         similarities.append(onset_sim)
-        weights.append(2.0)  # 給予節奏特徵更高權重
+        weights.append(SIMILARITY_WEIGHTS['onset'])
 
         # 時間序列特徵的 DTW 距離
         mfcc_dtw = dtw(features1['mfcc']['mean'], features2['mfcc']['mean'])[0][-1, -1]
-        # 正規化 MFCC DTW 距離
         mfcc_sim = 1.0 / (1.0 + mfcc_dtw / len(features1['mfcc']['mean']))
         similarities.append(mfcc_sim)
-        weights.append(1.5)
+        weights.append(SIMILARITY_WEIGHTS['mfcc'])
 
         # 統計特徵的餘弦相似度
         for feature_name in ['mfcc', 'mfcc_delta', 'chroma']:
@@ -345,43 +407,41 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
                 if feature_name in features1 and feature_name in features2:
                     feat1 = features1[feature_name][stat]
                     feat2 = features2[feature_name][stat]
-                    # 確保向量非零
                     if np.any(feat1) and np.any(feat2):
                         sim = cosine_similarity([feat1], [feat2])[0][0]
-                        # 將相似度範圍從[-1,1]調整到[0,1]
                         sim = (sim + 1) / 2
                         similarities.append(sim)
-                        # 給予不同特徵不同權重
-                        if feature_name in ['mfcc', 'mfcc_delta']:
-                            weights.append(1.2)
-                        else:
-                            weights.append(0.8)
+                        weights.append(SIMILARITY_WEIGHTS[feature_name])
 
         # Tempo 差異
         tempo_diff = abs(features1['tempo'] - features2['tempo'])
-        tempo_sim = 1.0 / (1.0 + tempo_diff / 20.0)  # 調整 tempo 差異的敏感度
+        tempo_sim = 1.0 / (1.0 + tempo_diff / 20.0)
         similarities.append(tempo_sim)
-        weights.append(1.5)
+        weights.append(SIMILARITY_WEIGHTS['tempo'])
 
         # 深度學習特徵的餘弦相似度
         if 'dl_features' in features1 and 'dl_features' in features2:
             dl_sim = cosine_similarity([features1['dl_features']], [features2['dl_features']])[0][0]
-            dl_sim = (dl_sim + 1) / 2  # 轉換到 [0,1] 範圍
+            dl_sim = (dl_sim + 1) / 2
             similarities.append(dl_sim)
-            weights.append(2.0)  # 給予深度學習特徵較高權重
+            weights.append(SIMILARITY_WEIGHTS['dl'])
+            
+        # PANN 特徵的餘弦相似度
+        if 'pann_features' in features1 and 'pann_features' in features2:
+            pann_sim = cosine_similarity([features1['pann_features']], [features2['pann_features']])[0][0]
+            pann_sim = (pann_sim + 1) / 2
+            similarities.append(pann_sim)
+            weights.append(SIMILARITY_WEIGHTS['pann'])
 
         # 計算加權平均
-        if not similarities:  # 如果沒有有效的相似度計算結果
+        if not similarities:
             return 0.0
             
         weighted_sum = sum(s * w for s, w in zip(similarities, weights))
         total_weight = sum(weights)
         final_similarity = weighted_sum / total_weight
 
-        # 確保相似度在 [0,1] 範圍內
-        final_similarity = max(0.0, min(1.0, final_similarity))
-
-        return float(final_similarity)
+        return float(max(0.0, min(1.0, final_similarity)))
     except Exception as e:
         logger.error(f"計算加權相似度時出錯: {str(e)}")
         return 0.0
@@ -403,18 +463,6 @@ def combine_features(features_list: list) -> dict:
                 for stat in features_list[0][key].keys()
             }
     return combined
-
-def get_optimal_workers(file_size: int) -> int:
-    """根據檔案大小和系統資源動態調整工作線程數"""
-    available_memory = psutil.virtual_memory().available
-    cpu_count = os.cpu_count() or 4
-    
-    if file_size > 1024 * 1024 * 1024:  # 1GB
-        return min(2, cpu_count)
-    elif available_memory > 8 * 1024 * 1024 * 1024:  # 8GB可用記憶體
-        return min(4, cpu_count)
-    else:
-        return 1
 
 def audio_similarity(path1: str, path2: str) -> float:
     try:
@@ -497,3 +545,65 @@ def detect_silence_segments(audio_path: str) -> list:
     except Exception as e:
         logger.error(f"檢測靜音段時出錯: {str(e)}")
         return []
+
+def compute_audio_features(audio_path: str) -> Optional[dict]:
+    """整合所有特徵提取過程的主函數"""
+    try:
+        cache_dir = os.path.join(os.path.dirname(audio_path), ".cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        file_id = hashlib.md5(audio_path.encode()).hexdigest()
+        cache_path = os.path.join(cache_dir, f"{file_id}_features.npz")
+        
+        # 檢查緩存
+        if os.path.exists(cache_path):
+            return load_cached_features(cache_path)
+            
+        def process_chunks():
+            for y_chunk, sr in load_audio(audio_path):
+                if check_memory_usage():
+                    logger.warning("記憶體使用率過高，進行垃圾回收")
+                chunk_features = parallel_feature_extraction(y_chunk, sr)
+                if chunk_features:
+                    yield chunk_features
+            
+        features_list = []
+        total_size = 0
+        
+        for chunk_feature in process_chunks():
+            features_list.append(chunk_feature)
+            total_size += sys.getsizeof(chunk_feature)
+            
+            # 如果中間結果太大，寫入磁碟
+            if total_size > MEMORY_CONFIG['intermediate_cache_size']:
+                intermediate = combine_features(features_list)
+                if intermediate:
+                    cache_features_to_disk(intermediate, cache_dir, f"{file_id}_temp")
+                features_list = []
+                total_size = 0
+        
+        if not features_list:
+            logger.error("沒有有效的音頻特徵可供處理")
+            return None
+            
+        final_features = combine_features(features_list)
+        if final_features is None:
+            logger.error("合併特徵失敗")
+            return None
+        
+        # 添加深度學習特徵
+        dl_features = extract_audio_features(audio_path)
+        if dl_features is not None:
+            final_features['dl_features'] = dl_features
+            
+        # 添加 PANN 特徵
+        pann_features = extract_pann_features(audio_path)
+        if pann_features is not None:
+            final_features['pann_features'] = pann_features
+        
+        # 緩存最終特徵
+        cache_features_to_disk(final_features, cache_dir, file_id)
+        return final_features
+        
+    except Exception as e:
+        logger.error(f"提取音頻特徵時出錯: {str(e)}")
+        return None
