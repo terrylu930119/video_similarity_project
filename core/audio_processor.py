@@ -1,31 +1,32 @@
-import sys, os
-sys.path.insert(0, os.path.abspath('./panns_inference'))
+import os
 import sys
 import time
+import torch
 import psutil
 import ffmpeg
 import librosa
 import hashlib
-import numpy as np
-import torch
 import torchaudio
+import torchopenl3
+import numpy as np
 from pydub import AudioSegment
 from utils.logger import logger
 from functools import lru_cache
 from librosa.sequence import dtw
+from sklearn.decomposition import PCA
+from panns_inference.models import Cnn14
 from pydub.silence import detect_nonsilent
-from scipy.spatial.distance import euclidean
+from typing import Optional, Generator, Tuple
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.metrics.pairwise import cosine_similarity
-from typing import Dict, Optional, Generator, Tuple, Any
-from panns_inference.models import Cnn14
 from panns_inference.inference import load_audio as pann_load_audio
-from sklearn.decomposition import PCA
+
+sys.path.insert(0, os.path.abspath('./panns_inference'))
 
 # =============== 全局配置参数 ===============
 # 音频处理参数
 AUDIO_CONFIG = {
-    'sample_rate': 16000,
+    'sample_rate': 32000,  # 统一使用32kHz采样率
     'channels': 1,
     'audio_bitrate': '192k',
     'format': 'wav',
@@ -67,13 +68,14 @@ SIMILARITY_WEIGHTS = {
     'mfcc': 1.5,
     'mfcc_delta': 1.2,
     'chroma': 0.8,
-    'tempo': 1.5
+    'tempo': 1.5,
+    'openl3': 2.0
 }
 
 # 内存管理参数
 MEMORY_CONFIG = {
-    'max_memory_percent': 80,
-    'intermediate_cache_size': 500 * 1024 * 1024,  # 500MB
+    'max_memory_percent': 70,
+    'intermediate_cache_size': 1000 * 1024 * 1024,  # 1GB
     'feature_cache_size': 10
 }
 
@@ -84,6 +86,14 @@ THREAD_CONFIG = {
         'medium_file': 4,
         'small_file': 1
     }
+}
+
+# 裁剪参数
+CROP_CONFIG = {
+    'min_duration': 30.0,     # 最小裁剪时长（秒）
+    'max_duration': 300.0,   # 最大裁剪时长（秒）
+    'overlap': 0.5,         # 重叠时长（秒）
+    'silence_threshold': -14 # 静音检测阈值（dB）
 }
 
 # =============== 全局变量初始化 ===============
@@ -125,11 +135,48 @@ def check_memory_usage():
         return True
     return False
 
+# 初始化 OpenL3 模型
+openl3_model = None
+
+def get_openl3_model():
+    global openl3_model
+    if openl3_model is None:
+        openl3_model = torchopenl3.models.load_audio_embedding_model(
+            input_repr="mel128",
+            content_type="music",
+            embedding_size=512,
+            device=device
+        )
+        openl3_model.eval()
+    return openl3_model
+
+def extract_openl3_features(audio_path: str) -> Optional[np.ndarray]:
+    try:
+        # 使用 librosa 載入音頻（openl3 需 stereo）
+        audio, sr = librosa.load(audio_path, sr=AUDIO_CONFIG['sample_rate'], mono=False)
+        if audio.ndim == 1:
+            audio = np.expand_dims(audio, axis=0)  # 強制成 (channels, samples)
+
+        model = get_openl3_model()
+        emb, _ = torchopenl3.get_audio_embedding(
+            audio,
+            sr,
+            model=model,
+            hop_size=1.0,
+            center=True,
+            verbose=False
+        )
+        # emb.shape: (T, 512)
+        return np.mean(emb, axis=0).astype(np.float32)
+    except Exception as e:
+        logger.error(f"OpenL3 特徵提取失敗 {audio_path}: {str(e)}")
+        return None
+    
 def get_pann_model():
     """獲取或初始化 PANN 模型"""
     global pann_model
     if pann_model is None:
-        pann_model = Cnn14(sample_rate=16000, window_size=1024, hop_size=320, mel_bins=64, fmin=50, fmax=14000)
+        pann_model = Cnn14(sample_rate=AUDIO_CONFIG['sample_rate'], window_size=1024, hop_size=320, mel_bins=64, fmin=50, fmax=14000)
         pann_model = pann_model.to(device)
         pann_model.eval()
     return pann_model
@@ -138,7 +185,7 @@ def extract_pann_features(audio_path: str) -> Optional[np.ndarray]:
     """使用 PANN 提取音頻特徵"""
     try:
         # 載入音頻
-        waveform, sr = pann_load_audio(audio_path, target_sr=32000)
+        waveform, sr = pann_load_audio(audio_path, target_sr=AUDIO_CONFIG['sample_rate'])
         waveform = torch.from_numpy(waveform).to(device)
         
         # 獲取模型
@@ -373,7 +420,7 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
                 if abs(features1[key] - features2[key]) > 1e-6:
                     all_equal = False
                     break
-            elif key in ['dl_features', 'pann_features']:
+            elif key in ['dl_features', 'pann_features', 'openl3_features']:
                 if not np.array_equal(features1[key], features2[key]):
                     all_equal = False
                     break
@@ -389,15 +436,23 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
         similarities = []
         weights = []
 
-        # DTW 距離計算（用於時間序列特徵）
-        onset_dtw = dtw(features1['onset_env'], features2['onset_env'])[0][-1, -1]
-        onset_sim = 1.0 / (1.0 + onset_dtw / len(features1['onset_env']))
+        # 对时间序列特征进行长度归一化
+        min_length = min(len(features1['onset_env']), len(features2['onset_env']))
+        onset_env1 = features1['onset_env'][:min_length]
+        onset_env2 = features2['onset_env'][:min_length]
+        
+        # DTW 距离计算（用于时间序列特征）
+        onset_dtw = dtw(onset_env1, onset_env2)[0][-1, -1]
+        onset_sim = 1.0 / (1.0 + onset_dtw / min_length)
         similarities.append(onset_sim)
         weights.append(SIMILARITY_WEIGHTS['onset'])
 
-        # 時間序列特徵的 DTW 距離
-        mfcc_dtw = dtw(features1['mfcc']['mean'], features2['mfcc']['mean'])[0][-1, -1]
-        mfcc_sim = 1.0 / (1.0 + mfcc_dtw / len(features1['mfcc']['mean']))
+        # 时间序列特征的 DTW 距离
+        min_mfcc_length = min(len(features1['mfcc']['mean']), len(features2['mfcc']['mean']))
+        mfcc1 = features1['mfcc']['mean'][:min_mfcc_length]
+        mfcc2 = features2['mfcc']['mean'][:min_mfcc_length]
+        mfcc_dtw = dtw(mfcc1, mfcc2)[0][-1, -1]
+        mfcc_sim = 1.0 / (1.0 + mfcc_dtw / min_mfcc_length)
         similarities.append(mfcc_sim)
         weights.append(SIMILARITY_WEIGHTS['mfcc'])
 
@@ -415,7 +470,7 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
 
         # Tempo 差異
         tempo_diff = abs(features1['tempo'] - features2['tempo'])
-        tempo_sim = 1.0 / (1.0 + tempo_diff / 20.0)
+        tempo_sim = 1.0 / (1.0 + tempo_diff / 30.0)  # 增加容错范围
         similarities.append(tempo_sim)
         weights.append(SIMILARITY_WEIGHTS['tempo'])
 
@@ -432,6 +487,13 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
             pann_sim = (pann_sim + 1) / 2
             similarities.append(pann_sim)
             weights.append(SIMILARITY_WEIGHTS['pann'])
+
+        # OpenL3 特徵的餘弦相似度
+        if 'openl3_features' in features1 and 'openl3_features' in features2:
+            l3_sim = cosine_similarity([features1['openl3_features']], [features2['openl3_features']])[0][0]
+            l3_sim = (l3_sim + 1) / 2  # 轉為 [0, 1] 區間
+            similarities.append(l3_sim)
+            weights.append(SIMILARITY_WEIGHTS['openl3'])
 
         # 計算加權平均
         if not similarities:
@@ -464,91 +526,70 @@ def combine_features(features_list: list) -> dict:
             }
     return combined
 
-def audio_similarity(path1: str, path2: str) -> float:
-    try:
-        file_size = max(os.path.getsize(path1), os.path.getsize(path2))
-        max_workers = get_optimal_workers(file_size)
+def crop_audio(audio_path: str, start_time: float, end_time: float, output_path: Optional[str] = None) -> str:
+    """
+    裁剪音频文件
+    
+    Args:
+        audio_path: 输入音频文件路径
+        start_time: 开始时间（秒）
+        end_time: 结束时间（秒）
+        output_path: 输出文件路径（可选）
         
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            features = list(executor.map(compute_audio_features, [path1, path2]))
-
-        features1, features2 = features
-        if features1 is None or features2 is None:
-            logger.error("無法提取音頻特徵")
-            return 0.0
-
-        # 計算加權相似度
-        similarity = compute_weighted_similarity(features1, features2)
-        logger.info(f"加權音頻相似度: {similarity:.3f}")
-
-        return float(similarity)
-    except Exception as e:
-        logger.error(f"計算音頻相似度時出錯: {str(e)}")
-        return 0.0
-
-def extract_audio(video_path: str) -> str:
+    Returns:
+        str: 裁剪后的音频文件路径
+    """
     try:
-        if not os.path.exists(video_path):
-            logger.error(f"影片檔案不存在: {video_path}")
-            raise FileNotFoundError(f"影片檔案不存在: {video_path}")
-
-        video_dir = os.path.dirname(os.path.abspath(video_path))
-        audio_dir = os.path.join(video_dir, "audio")
-        os.makedirs(audio_dir, exist_ok=True)
-
-        video_name = os.path.splitext(os.path.basename(video_path))[0]
-        audio_path = os.path.join(audio_dir, f"{video_name}.wav")
-
-        if not os.access(audio_dir, os.W_OK):
-            logger.error(f"沒有輸出目錄的寫入權限: {audio_dir}")
-            raise PermissionError(f"沒有輸出目錄的寫入權限: {audio_dir}")
-
-        if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-            logger.info(f"音訊檔案已存在: {audio_path}")
-            return audio_path
-
-        logger.info(f"開始提取音訊: {video_path} -> {audio_path}")
-        ffmpeg.input(video_path).output(
-            audio_path,
-            acodec='pcm_s16le',
-            ac=1,
-            ar=16000,
-            format='wav',
-            audio_bitrate='192k'
-        ).overwrite_output().run(quiet=True, capture_stdout=True, capture_stderr=True)
-
-        for _ in range(5):
-            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
-                logger.info(f"音訊檔案已生成: {audio_path}")
-                return audio_path
-            time.sleep(1)
-
-        logger.error("音訊檔案生成失敗或檔案大小為0")
-        raise RuntimeError("音訊檔案生成失敗")
+        if not os.path.exists(audio_path):
+            raise FileNotFoundError(f"音频文件不存在: {audio_path}")
+            
+        # 验证裁剪参数
+        duration = end_time - start_time
+        if duration < CROP_CONFIG['min_duration']:
+            raise ValueError(f"裁剪时长过短，最小需要 {CROP_CONFIG['min_duration']} 秒")
+        if duration > CROP_CONFIG['max_duration']:
+            raise ValueError(f"裁剪时长过长，最大允许 {CROP_CONFIG['max_duration']} 秒")
+            
+        if output_path is None:
+            # 生成输出文件路径
+            base_name = os.path.splitext(os.path.basename(audio_path))[0]
+            output_dir = os.path.join(os.path.dirname(audio_path), "cropped")
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, f"{base_name}_cropped_{start_time}_{end_time}.wav")
+            
+        # 使用 ffmpeg 进行裁剪
+        stream = ffmpeg.input(audio_path)
+        stream = ffmpeg.output(
+            stream,
+            output_path,
+            ss=start_time,
+            t=duration,
+            acodec=AUDIO_CONFIG['codec'],
+            ac=AUDIO_CONFIG['channels'],
+            ar=AUDIO_CONFIG['sample_rate'],
+            format=AUDIO_CONFIG['format'],
+            audio_bitrate=AUDIO_CONFIG['audio_bitrate']
+        )
+        ffmpeg.run(stream, quiet=True, capture_stdout=True, capture_stderr=True)
+        
+        # 验证输出文件
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            raise RuntimeError("音频裁剪失败")
+            
+        logger.info(f"音频裁剪成功: {output_path}")
+        return output_path
+        
     except Exception as e:
-        logger.error(f"音訊提取失敗: {str(e)}")
+        logger.error(f"音频裁剪失败: {str(e)}")
         raise
 
-def detect_silence_segments(audio_path: str) -> list:
-    """
-    檢測音頻中的靜音段，用於優化切割點
-    """
-    try:
-        audio = AudioSegment.from_wav(audio_path)
-        nonsilent_ranges = detect_nonsilent(
-            audio,
-            min_silence_len=300,  # 最小静音长度（毫秒）
-            silence_thresh = audio.dBFS - 14 # 静音阈值（dB）
-        )
-        
-        return nonsilent_ranges
-    except Exception as e:
-        logger.error(f"檢測靜音段時出錯: {str(e)}")
-        return []
-
-def compute_audio_features(audio_path: str) -> Optional[dict]:
+def compute_audio_features(audio_path: str, start_time: Optional[float] = None, end_time: Optional[float] = None) -> Optional[dict]:
     """整合所有特徵提取過程的主函數"""
     try:
+        # 如果需要裁剪
+        if start_time is not None and end_time is not None:
+            audio_path = crop_audio(audio_path, start_time, end_time)
+            
         cache_dir = os.path.join(os.path.dirname(audio_path), ".cache")
         os.makedirs(cache_dir, exist_ok=True)
         file_id = hashlib.md5(audio_path.encode()).hexdigest()
@@ -599,7 +640,12 @@ def compute_audio_features(audio_path: str) -> Optional[dict]:
         pann_features = extract_pann_features(audio_path)
         if pann_features is not None:
             final_features['pann_features'] = pann_features
-        
+
+        # 添加 OpenL3 特徵
+        openl3_features = extract_openl3_features(audio_path)
+        if openl3_features is not None:
+            final_features['openl3_features'] = openl3_features
+            
         # 緩存最終特徵
         cache_features_to_disk(final_features, cache_dir, file_id)
         return final_features
@@ -607,3 +653,112 @@ def compute_audio_features(audio_path: str) -> Optional[dict]:
     except Exception as e:
         logger.error(f"提取音頻特徵時出錯: {str(e)}")
         return None
+
+def audio_similarity(path1: str, path2: str, start_time1: Optional[float] = None, end_time1: Optional[float] = None, 
+                    start_time2: Optional[float] = None, end_time2: Optional[float] = None) -> float:
+    """
+    计算两个音频文件的相似度，支持指定时间范围
+    
+    Args:
+        path1: 第一个音频文件路径
+        path2: 第二个音频文件路径
+        start_time1: 第一个音频的开始时间（秒）
+        end_time1: 第一个音频的结束时间（秒）
+        start_time2: 第二个音频的开始时间（秒）
+        end_time2: 第二个音频的结束时间（秒）
+        
+    Returns:
+        float: 相似度分数（0-1之间）
+    """
+    try:
+        file_size = max(os.path.getsize(path1), os.path.getsize(path2))
+        max_workers = get_optimal_workers(file_size)
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            features = list(executor.map(
+                lambda x: compute_audio_features(x[0], x[1], x[2]),
+                [(path1, start_time1, end_time1), (path2, start_time2, end_time2)]
+            ))
+
+        features1, features2 = features
+        if features1 is None or features2 is None:
+            logger.error("無法提取音頻特徵")
+            return 0.0
+
+        # 計算加權相似度
+        similarity = compute_weighted_similarity(features1, features2)
+        logger.info(f"加權音頻相似度: {similarity:.3f}")
+
+        return float(similarity)
+    except Exception as e:
+        logger.error(f"計算音頻相似度時出錯: {str(e)}")
+        return 0.0
+
+def extract_audio(video_path: str) -> str:
+    """
+    从视频文件中提取音频
+    
+    Args:
+        video_path: 视频文件路径
+        
+    Returns:
+        str: 提取的音频文件路径
+    """
+    try:
+        if not os.path.exists(video_path):
+            logger.error(f"影片檔案不存在: {video_path}")
+            raise FileNotFoundError(f"影片檔案不存在: {video_path}")
+
+        video_dir = os.path.dirname(os.path.abspath(video_path))
+        audio_dir = os.path.join(video_dir, "audio")
+        os.makedirs(audio_dir, exist_ok=True)
+
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        audio_path = os.path.join(audio_dir, f"{video_name}.wav")
+
+        if not os.access(audio_dir, os.W_OK):
+            logger.error(f"沒有輸出目錄的寫入權限: {audio_dir}")
+            raise PermissionError(f"沒有輸出目錄的寫入權限: {audio_dir}")
+
+        if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+            logger.info(f"音訊檔案已存在: {audio_path}")
+            return audio_path
+
+        logger.info(f"開始提取音訊: {video_path} -> {audio_path}")
+        ffmpeg.input(video_path).output(
+            audio_path,
+            acodec=AUDIO_CONFIG['codec'],
+            ac=AUDIO_CONFIG['channels'],
+            ar=AUDIO_CONFIG['sample_rate'],
+            format=AUDIO_CONFIG['format'],
+            audio_bitrate=AUDIO_CONFIG['audio_bitrate']
+        ).overwrite_output().run(quiet=True, capture_stdout=True, capture_stderr=True)
+
+        for _ in range(5):
+            if os.path.exists(audio_path) and os.path.getsize(audio_path) > 0:
+                logger.info(f"音訊檔案已生成: {audio_path}")
+                return audio_path
+            time.sleep(1)
+
+        logger.error("音訊檔案生成失敗或檔案大小為0")
+        raise RuntimeError("音訊檔案生成失敗")
+    except Exception as e:
+        logger.error(f"音訊提取失敗: {str(e)}")
+        raise
+
+def detect_silence_segments(audio_path: str) -> list:
+    """
+    檢測音頻中的靜音段，用於優化切割點
+    """
+    try:
+        audio = AudioSegment.from_wav(audio_path)
+        nonsilent_ranges = detect_nonsilent(
+            audio,
+            min_silence_len=300,  # 最小静音长度（毫秒）
+            silence_thresh=audio.dBFS + CROP_CONFIG['silence_threshold']  # 使用配置的静音阈值
+        )
+        
+        return nonsilent_ranges
+    except Exception as e:
+        logger.error(f"檢測靜音段時出錯: {str(e)}")
+        return []

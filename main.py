@@ -1,17 +1,16 @@
 import os
-import argparse
 import sys
-import traceback
+import torch
 import signal
 import shutil
+import traceback
+from utils.logger import logger
+from utils.gpu_utils import gpu_manager
 from utils.downloader import download_video
 from core.audio_processor import extract_audio
 from core.text_processor import transcribe_audio
-from core.similarity import calculate_overall_similarity, display_similarity_results
 from utils.video_utils import extract_frames, get_video_info
-from utils.logger import logger
-from utils.gpu_utils import gpu_manager
-import torch
+from core.similarity import calculate_overall_similarity, display_similarity_results
 
 # 全局變量用於追踪清理狀態
 _cleanup_in_progress = False
@@ -134,8 +133,10 @@ def main():
             logger.warning("GPU 加速不可用，將使用 CPU 進行處理")
         
         # 設定參數
-        reference_link = "https://www.bilibili.com/video/BV1Pp7WzqES2/?spm_id_from=333.337.search-card.all.click&vd_source=6652d02982a20ea968442207129231f8"
-        comparison_links = [ "https://www.youtube.com/watch?v=JuiKFLw-0vA"
+        reference_link = "https://www.youtube.com/watch?v=0PGfVrLeXUU"
+        comparison_links = [ "https://www.bilibili.com/video/BV17A6zY1ES7/?spm_id_from=333.337.search-card.all.click&vd_source=6652d02982a20ea968442207129231f8",
+                            "https://www.youtube.com/watch?v=v-dKrhA6_i0",
+                            "https://www.youtube.com/watch?v=6umH5XQpXws"
         ]
         time_interval = 2.0  # 每2秒提取一幀
         resolution = "720p"
