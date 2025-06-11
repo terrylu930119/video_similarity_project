@@ -64,14 +64,14 @@ CHUNK_CONFIG = {
 
 # 相似度计算权重
 SIMILARITY_WEIGHTS = {
-    'pann': 2.5,
-    'dl': 2.0,
-    'onset': 2.0,
+    'pann': 1.2,
+    'dl': 2.8,
+    'onset': 0.8,
     'mfcc': 1.5,
-    'mfcc_delta': 1.2,
-    'chroma': 0.8,
-    'tempo': 1.5,
-    'openl3': 2.0
+    'mfcc_delta': 0.7,
+    'chroma': 1.2,
+    'tempo': 1.4,
+    'openl3': 2.8
 }
 
 # 内存管理参数
@@ -308,67 +308,91 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
     try:
         segment_length = sr * 5  # 5秒一段
         segments = [audio_data[i:i + segment_length] for i in range(0, len(audio_data), segment_length)]
+        
+        if not segments:
+            logger.error("音頻數據為空")
+            return None
 
         def extract_segment_features(segment):
-            if len(segment) < sr * 0.5:
-                return None
+            try:
+                if len(segment) < sr * 0.5:
+                    logger.warning(f"音頻段太短: {len(segment)/sr:.2f}秒")
+                    return None
 
-            # 使用較低的採樣率計算梅爾頻譜圖
-            mel_spec = librosa.feature.melspectrogram(
-                y=segment, 
-                sr=sr,
-                n_mels=FEATURE_CONFIG['mel']['n_mels'],
-                hop_length=FEATURE_CONFIG['mel']['hop_length']
-            )
-            
-            # 計算 MFCC
-            mfcc = librosa.feature.mfcc(
-                y=segment, 
-                sr=sr, 
-                n_mfcc=FEATURE_CONFIG['mfcc']['n_mfcc'],
-                hop_length=FEATURE_CONFIG['mfcc']['hop_length']
-            )
-            
-            # 計算 MFCC delta
-            mfcc_delta = librosa.feature.delta(mfcc)
-            
-            # 計算色度特徵
-            chroma = librosa.feature.chroma_stft(
-                y=segment, 
-                sr=sr,
-                hop_length=FEATURE_CONFIG['chroma']['hop_length'],
-                n_chroma=FEATURE_CONFIG['chroma']['n_chroma']
-            )
-            
-            # 計算節奏特徵
-            onset_env = librosa.onset.onset_strength(
-                y=segment, 
-                sr=sr,
-                hop_length=FEATURE_CONFIG['mel']['hop_length']
-            )
-            
-            # 計算 tempo
-            tempo = librosa.beat.tempo(onset_envelope=onset_env, sr=sr)[0]
-            
-            def get_stats(feature):
-                if len(feature.shape) == 1:
-                    feature = feature.reshape(1, -1)
-                stats = {
-                    'mean': np.mean(feature, axis=1),
-                    'std': np.std(feature, axis=1),
-                    'max': np.max(feature, axis=1),
-                    'min': np.min(feature, axis=1),
-                    'median': np.median(feature, axis=1)
+                # 使用較低的採樣率計算梅爾頻譜圖
+                mel_spec = librosa.feature.melspectrogram(
+                    y=segment, 
+                    sr=sr,
+                    n_mels=FEATURE_CONFIG['mel']['n_mels'],
+                    hop_length=FEATURE_CONFIG['mel']['hop_length']
+                )
+                
+                # 計算 MFCC
+                mfcc = librosa.feature.mfcc(
+                    y=segment, 
+                    sr=sr, 
+                    n_mfcc=FEATURE_CONFIG['mfcc']['n_mfcc'],
+                    hop_length=FEATURE_CONFIG['mfcc']['hop_length']
+                )
+                
+                # 計算 MFCC delta
+                mfcc_delta = librosa.feature.delta(mfcc)
+                
+                # 計算色度特徵
+                chroma = librosa.feature.chroma_stft(
+                    y=segment, 
+                    sr=sr,
+                    hop_length=FEATURE_CONFIG['chroma']['hop_length'],
+                    n_chroma=FEATURE_CONFIG['chroma']['n_chroma']
+                )
+                
+                # 計算節奏特徵
+                onset_env = librosa.onset.onset_strength(
+                    y=segment, 
+                    sr=sr,
+                    hop_length=FEATURE_CONFIG['mel']['hop_length']
+                )
+                
+                # 使用 librosa.beat.tempo 計算 tempo
+                tempo = librosa.beat.tempo(onset_envelope=onset_env, sr=sr)[0]
+                
+                def get_stats(feature):
+                    try:
+                        if len(feature.shape) == 1:
+                            feature = feature.reshape(1, -1)
+                        elif len(feature.shape) > 2:
+                            feature = feature.reshape(feature.shape[0], -1)
+                        stats = {
+                            'mean': np.mean(feature, axis=1),
+                            'std': np.std(feature, axis=1),
+                            'max': np.max(feature, axis=1),
+                            'min': np.min(feature, axis=1),
+                            'median': np.median(feature, axis=1)
+                        }
+                        return {k: np.array(v, dtype=np.float32) for k, v in stats.items()}
+                    except Exception as e:
+                        logger.error(f"計算特徵統計時出錯: {str(e)}")
+                        return None
+
+                features = {
+                    'mfcc': get_stats(mfcc),
+                    'mfcc_delta': get_stats(mfcc_delta),
+                    'chroma': get_stats(chroma),
+                    'mel': get_stats(mel_spec),
+                    'onset_env': onset_env.astype(np.float32),
+                    'tempo': float(tempo)
                 }
-                return {k: np.array(v, dtype=np.float32) for k, v in stats.items()}
-            
-            return {
-                'mfcc': get_stats(mfcc),
-                'mfcc_delta': get_stats(mfcc_delta),
-                'chroma': get_stats(chroma),
-                'onset_env': onset_env.astype(np.float32),
-                'tempo': float(tempo)
-            }
+                
+                # 驗證特徵
+                if any(v is None for v in features.values()):
+                    logger.error("特徵提取不完整")
+                    return None
+                    
+                return features
+                
+            except Exception as e:
+                logger.error(f"處理音頻段時出錯: {str(e)}")
+                return None
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             segment_features = list(executor.map(extract_segment_features, segments))
@@ -380,19 +404,30 @@ def parallel_feature_extraction(audio_data: np.ndarray, sr: int) -> dict:
             return None
 
         # 合併所有段的特徵
-        combined_features = {}
-        for key in segment_features[0].keys():
-            if key == 'onset_env':
-                combined_features[key] = np.concatenate([f[key] for f in segment_features])
-            elif key == 'tempo':
-                combined_features[key] = float(np.mean([f[key] for f in segment_features]))
-            else:
-                combined_features[key] = {
-                    stat: np.mean([f[key][stat] for f in segment_features], axis=0).astype(np.float32)
-                    for stat in segment_features[0][key].keys()
-                }
-
-        return combined_features
+        try:
+            combined_features = {}
+            for key in segment_features[0].keys():
+                if key == 'onset_env':
+                    combined_features[key] = np.concatenate([f[key] for f in segment_features])
+                elif key == 'tempo':
+                    combined_features[key] = float(np.mean([f[key] for f in segment_features]))
+                else:
+                    combined_features[key] = {
+                        stat: np.mean([f[key][stat] for f in segment_features], axis=0).astype(np.float32)
+                        for stat in segment_features[0][key].keys()
+                    }
+            
+            # 驗證合併後的特徵
+            if not all(key in combined_features for key in ['mfcc', 'mfcc_delta', 'chroma', 'onset_env', 'tempo']):
+                logger.error("合併後的特徵不完整")
+                return None
+                
+            return combined_features
+            
+        except Exception as e:
+            logger.error(f"合併特徵時出錯: {str(e)}")
+            return None
+            
     except Exception as e:
         logger.error(f"特徵提取失敗: {str(e)}")
         return None
@@ -461,18 +496,18 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
         similarities = []
         weights = []
 
-        # 对时间序列特征进行长度归一化
+        # 對時間序列特徵進行長度歸一化
         min_length = min(len(features1['onset_env']), len(features2['onset_env']))
         onset_env1 = features1['onset_env'][:min_length]
         onset_env2 = features2['onset_env'][:min_length]
         
-        # DTW 距离计算（用于时间序列特征）
+        # DTW 距離計算（用於時間序列特徵）
         onset_dtw = dtw(onset_env1, onset_env2)[0][-1, -1]
         onset_sim = 1.0 / (1.0 + onset_dtw / min_length)
         similarities.append(onset_sim)
         weights.append(SIMILARITY_WEIGHTS['onset'])
 
-        # 时间序列特征的 DTW 距离
+        # 時間序列特徵的 DTW 距離
         min_mfcc_length = min(len(features1['mfcc']['mean']), len(features2['mfcc']['mean']))
         mfcc1 = features1['mfcc']['mean'][:min_mfcc_length]
         mfcc2 = features2['mfcc']['mean'][:min_mfcc_length]
@@ -488,34 +523,54 @@ def compute_weighted_similarity(features1: dict, features2: dict) -> float:
                     feat1 = features1[feature_name][stat]
                     feat2 = features2[feature_name][stat]
                     if np.any(feat1) and np.any(feat2):
-                        sim = cosine_similarity([feat1], [feat2])[0][0]
+                        # 確保特徵是 2D 數組
+                        if len(feat1.shape) > 2:
+                            feat1 = feat1.reshape(feat1.shape[0], -1)
+                        if len(feat2.shape) > 2:
+                            feat2 = feat2.reshape(feat2.shape[0], -1)
+                        
+                        # 確保特徵向量長度一致
+                        min_len = min(feat1.size, feat2.size)
+                        feat1_flat = feat1.flatten()[:min_len]
+                        feat2_flat = feat2.flatten()[:min_len]
+                        
+                        sim = cosine_similarity([feat1_flat], [feat2_flat])[0][0]
                         sim = (sim + 1) / 2
                         similarities.append(sim)
                         weights.append(SIMILARITY_WEIGHTS[feature_name])
 
         # Tempo 差異
         tempo_diff = abs(features1['tempo'] - features2['tempo'])
-        tempo_sim = 1.0 / (1.0 + tempo_diff / 30.0)  # 增加容错范围
+        tempo_sim = 1.0 / (1.0 + tempo_diff / 30.0)  # 增加容錯範圍
         similarities.append(tempo_sim)
         weights.append(SIMILARITY_WEIGHTS['tempo'])
 
         # 深度學習特徵的餘弦相似度
         if 'dl_features' in features1 and 'dl_features' in features2:
-            dl_sim = cosine_similarity([features1['dl_features']], [features2['dl_features']])[0][0]
+            feat1 = features1['dl_features'].flatten()
+            feat2 = features2['dl_features'].flatten()
+            min_len = min(feat1.size, feat2.size)
+            dl_sim = cosine_similarity([feat1[:min_len]], [feat2[:min_len]])[0][0]
             dl_sim = (dl_sim + 1) / 2
             similarities.append(dl_sim)
             weights.append(SIMILARITY_WEIGHTS['dl'])
             
         # PANN 特徵的餘弦相似度
         if 'pann_features' in features1 and 'pann_features' in features2:
-            pann_sim = cosine_similarity([features1['pann_features']], [features2['pann_features']])[0][0]
+            feat1 = features1['pann_features'].flatten()
+            feat2 = features2['pann_features'].flatten()
+            min_len = min(feat1.size, feat2.size)
+            pann_sim = cosine_similarity([feat1[:min_len]], [feat2[:min_len]])[0][0]
             pann_sim = (pann_sim + 1) / 2
             similarities.append(pann_sim)
             weights.append(SIMILARITY_WEIGHTS['pann'])
 
         # OpenL3 特徵的餘弦相似度
         if 'openl3_features' in features1 and 'openl3_features' in features2:
-            l3_sim = cosine_similarity([features1['openl3_features']], [features2['openl3_features']])[0][0]
+            feat1 = features1['openl3_features'].flatten()
+            feat2 = features2['openl3_features'].flatten()
+            min_len = min(feat1.size, feat2.size)
+            l3_sim = cosine_similarity([feat1[:min_len]], [feat2[:min_len]])[0][0]
             l3_sim = (l3_sim + 1) / 2  # 轉為 [0, 1] 區間
             similarities.append(l3_sim)
             weights.append(SIMILARITY_WEIGHTS['openl3'])

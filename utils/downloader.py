@@ -103,7 +103,7 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
         'ignoreerrors': True,  # 忽略字幕下載錯誤
         'skip_download': False,
         'writedescription': False,
-        'writeinfojson': False,
+        'writeinfojson': True, 
         'writeannotations': False,
         'writethumbnailjpg': False,
         'write_all_thumbnails': False,
@@ -115,6 +115,7 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
         'geo_bypass_country': 'US',  # 使用美國 IP
         'extractor_retries': 5,  # 增加提取器重試次數
         'format_sort': ['res', 'ext:mp4:m4a', 'size', 'br', 'asr'],  # 添加格式排序選項
+        'verbose': False,
     }
     
     try:
