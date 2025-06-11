@@ -62,6 +62,31 @@ def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0)
         # 創建幀輸出目錄
         frames_dir = os.path.join(output_dir, video_id)
         os.makedirs(frames_dir, exist_ok=True)
+        
+        # 檢查是否已經存在幀文件
+        existing_frames = sorted([
+            os.path.join(frames_dir, f) 
+            for f in os.listdir(frames_dir) 
+            if f.startswith(f'{video_id}_frame_') and f.endswith('.jpg')
+        ])
+        
+        # 如果存在幀文件，檢查它們是否有效
+        if existing_frames:
+            # 檢查所有幀文件是否都存在且大小不為0
+            valid_frames = []
+            for frame in existing_frames:
+                if os.path.exists(frame) and os.path.getsize(frame) > 0:
+                    valid_frames.append(frame)
+                else:
+                    logger.warning(f"發現無效的幀文件: {frame}")
+            
+            if valid_frames:
+                logger.info(f"使用現有的 {len(valid_frames)} 個幀文件")
+                return valid_frames
+            else:
+                logger.warning("現有的幀文件無效，將重新提取")
+        
+        # 如果沒有有效的現有幀文件，則進行提取
         output_pattern = os.path.join(frames_dir, f'{video_id}_frame_%04d.jpg')
         
         # 構建基本 FFmpeg 命令
