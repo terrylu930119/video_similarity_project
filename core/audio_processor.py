@@ -59,12 +59,21 @@ def load_audio(audio_path: str) -> Generator[Tuple[np.ndarray, int], None, None]
     except Exception as e:
         logger.error(f"載入音頻文件失敗 {audio_path}: {str(e)}")
         return None
+    
+def normalize_waveform(waveform: torch.Tensor) -> torch.Tensor:
+    """對 waveform 進行音量與能量正規化處理，降低編碼差異影響"""
+    waveform = waveform - waveform.mean()
+    waveform = waveform / waveform.abs().max().clamp(min=1e-6)
+    waveform = waveform / (waveform.norm(p=2) + 1e-9)
+    return waveform
+
 
 def extract_audio_features(audio_path: str, embedding_size: int = 512) -> Optional[np.ndarray]:
     """使用 PyTorch 提取音頻特徵"""
     try:
         # 載入音頻
         waveform, sample_rate = torchaudio.load(audio_path)
+        waveform = normalize_waveform(waveform)
         waveform = waveform.to(device)
         
         # 使用梅爾頻譜圖作為特徵
