@@ -6,30 +6,29 @@ import whisper
 import torchaudio
 from math import ceil
 from itertools import groupby
+from collections import Counter
 from utils.logger import logger
 from utils.gpu_utils import gpu_manager
 from core.audio_processor import load_audio
 from concurrent.futures import ThreadPoolExecutor
 from utils.downloader import generate_safe_filename
 from sentence_transformers import SentenceTransformer, util
+from utils.audio_cleaner import load_and_clean_audio
+from faster_whisper import WhisperModel
+
 
 # 全域模型變數
 _whisper_model = None
 _sentence_transformer = None
 
 def get_whisper_model():
-    """
-    獲取全域 Whisper 模型實例，如果未載入則進行載入
-    """
+    """取得或載入 faster-whisper 模型"""
     global _whisper_model
     if _whisper_model is None:
-        logger.info("正在載入 Whisper medium 模型...")
-        _whisper_model = whisper.load_model("medium")
-        # 如果有 GPU，將模型移至 GPU
-        gpu_available = torch.cuda.is_available()
-        if gpu_available:
-            logger.info("將 Whisper 模型移至 GPU")
-            _whisper_model = _whisper_model.to(torch.device('cuda'))
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info("正在載入 faster-whisper medium 模型...")
+        compute_type = "float16" if torch.cuda.is_available() else "int8"
+        _whisper_model = WhisperModel("medium", device=device, compute_type=compute_type)
         logger.info("Whisper 模型載入完成")
     return _whisper_model
 
@@ -193,6 +192,7 @@ def extract_subtitles(video_url: str, output_dir: str) -> str:
         logger.error(f"提取字幕時出錯: {str(e)}")
         return ""
 
+# legacy use: 保留舊版後處理邏輯，預設流程中不再呼叫
 def post_process_transcript(text: str, language: str = None) -> str:
     """
     後處理轉錄文本，處理重複和格式化問題
@@ -341,18 +341,29 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
                     # 計算片段的起始和結束位置
                     start = int(i * (samples_per_segment - overlap_samples))
                     end = int(min(start + samples_per_segment, len(y)))
-                    
+
                     # 提取片段
                     segment = y[start:end]
-                    
+
+                    # 🔍 加這行來檢查片段是否有聲音
+                    import numpy as np
+                    print(f"[DEBUG] segment_{i:03d}: max_volume={np.abs(segment).max():.4f}, length={len(segment)}")
+
                     # 保存片段
                     segment_path = os.path.join(temp_dir, f"segment_{i:03d}.wav")
                     sf.write(segment_path, segment, sr)
+
+                    # 顯示檔案大小
+                    print(f"[DEBUG] segment_{i:03d}.wav saved, size: {os.path.getsize(segment_path)} bytes")
+
                     logger.info(f"已保存片段 {i+1}/{num_segments}")
                     return segment_path
+
                 except Exception as e:
                     logger.error(f"處理片段 {i+1} 時出錯: {str(e)}")
                     return None
+
+
             
             # 根據系統資源動態調整線程數
             import psutil
@@ -428,25 +439,15 @@ def merge_transcripts(transcripts: list) -> str:
     """
     return " ".join(filter(None, transcripts))
 
-def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = None, language: str = None, use_silence_detection: bool = True, merge_gap_threshold: int = 1000, min_segment_duration: int = 3, use_source_separation: bool = True) -> str:
+def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = None,
+                     use_silence_detection: bool = True, merge_gap_threshold: int = 1000,
+                     min_segment_duration: int = 3, use_source_separation: bool = True,
+                     track_languages: bool = True) -> str:
     """
-    轉錄音訊，優先順序：
-    1. 檢查已存在的轉錄文件
-    2. 檢查字幕文件（如果提供了影片 URL）
-    3. 進行語音辨識
-    
-    參數:
-        audio_path: 音頻文件路徑
-        video_url: 影片 URL，用於提取字幕
-        output_dir: 輸出目錄
-        language: 語言代碼
-        use_silence_detection: 是否使用靜音斷點切割
-        merge_gap_threshold: 合併靜音段的閾值（毫秒）
-        min_segment_duration: 最小片段時長（秒）
-        use_source_separation: 是否使用音源分離
+    使用 Faster-Whisper 進行語音轉錄，支援語言自動偵測與段落語系記錄。
     """
     try:
-        # 1. 首先檢查是否已有轉錄文件
+        # 若已有轉錄檔案
         if output_dir:
             transcript_path = os.path.join(output_dir, os.path.basename(audio_path).replace('.wav', '_transcript.txt'))
             if os.path.exists(transcript_path):
@@ -456,123 +457,166 @@ def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = N
                         if content.strip():
                             logger.info(f"找到現有轉錄文件：{transcript_path}")
                             return content.strip()
-                        else:
-                            logger.info("現有轉錄文件為空，將重新轉錄")
                 except Exception as e:
-                    logger.warning(f"讀取現有轉錄文件時出錯：{str(e)}，將重新轉錄")
+                    logger.warning(f"讀取現有轉錄文件時出錯：{str(e)}")
 
-        # 2. 如果提供了影片 URL，嘗試提取字幕
+        # 嘗試使用字幕
         if video_url and output_dir:
             logger.info("嘗試從字幕文件讀取...")
             subtitle_text = extract_subtitles(video_url, output_dir)
             if subtitle_text:
                 logger.info("成功讀取字幕文件")
-                # 保存字幕內容為轉錄文件
                 if output_dir:
                     try:
                         with open(transcript_path, 'w', encoding='utf-8') as f:
                             f.write(f"來源：字幕文件\n\n")
                             f.write(subtitle_text)
-                        logger.info(f"已將字幕內容保存為轉錄文件：{transcript_path}")
                     except Exception as e:
                         logger.warning(f"保存字幕內容時出錯：{str(e)}")
                 return subtitle_text
-            logger.info("未找到可用的字幕，將使用語音辨識")
 
-        # 3. 進行語音辨識
         logger.info("開始進行語音辨識...")
-        
-        # 清理 GPU 記憶體
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        
-        # 獲取模型
+
         model = get_whisper_model()
-        
-        # 分割音頻（使用靜音斷點切割或固定長度切割）
+
+        # 前處理音訊
+        audio_path = load_and_clean_audio(audio_path)
+
+        # 分段
         logger.info("開始分割音頻...")
         segment_files = split_audio_for_transcription(
-            audio_path, 
-            segment_duration=120, 
-            overlap=2, 
+            audio_path,
+            segment_duration=120,
+            overlap=2,
             use_silence_detection=use_silence_detection,
             merge_gap_threshold=merge_gap_threshold,
             min_segment_duration=min_segment_duration
         )
         if not segment_files:
             raise Exception("音頻分割失敗")
-        
-        # 逐段轉錄
+
         all_transcripts = []
+        per_segment_languages = []
         total_segments = len(segment_files)
-        first_detected_language = None
-        
+
         for i, segment_path in enumerate(segment_files, 1):
             logger.info(f"正在轉錄第 {i}/{total_segments} 個片段...")
             try:
-                result = model.transcribe(
+                segments, info = model.transcribe(
                     segment_path,
-                    task="transcribe",
-                    language=language,
-                    temperature=0.0,
-                    best_of=5,
                     beam_size=5,
-                    fp16=torch.cuda.is_available(),
-                    verbose=False,
+                    temperature=0.0,
+                    vad_filter=False,
+                    compression_ratio_threshold=5.0,
+                    log_prob_threshold=-2.5,
+                    no_speech_threshold=0.6,
                 )
+
+                segments = list(segments)
+                transcript = "".join([s.text for s in segments]).strip()
+                detected_language = info.language or "未知"
+                per_segment_languages.append(detected_language)
+
+                if not transcript or len(transcript) < 10:
+                    logger.warning(f"⚠️ 第 {i+1} 段內容過短（{len(transcript)} 字元），略過")
+                    continue
+
+                if is_excessive_repetition(transcript, phrase_threshold=20, length_threshold=0.8):
+                    logger.warning(f"⚠️ 第 {i+1} 段內容過度重複（可能為幻覺），略過")
+                    continue
                 
-                transcript = result["text"].strip()
-                detected_language = result.get("language", "未知")
-                
-                if i == 1:  # 只記錄第一個片段檢測到的語言
-                    first_detected_language = detected_language
-                
-                # 後處理轉錄文本
-                transcript = post_process_transcript(transcript, language or detected_language)
+                # 🧠【安全過濾：過度重複】
+                if any(transcript.count(phrase) >= 5 for phrase in [
+                    "Thank you for watching",
+                    "This is the first time I've ever seen",
+                    "See you in the next video"
+                ]):
+                    logger.warning(f"⚠️ 第 {i} 段出現大量重複語句，視為 hallucination，略過")
+                    continue
+
+                # 🚨【語言異常提醒（不過濾）】
+                if detected_language not in {"zh", "en", "ja"}:
+                    logger.warning(f"⚠️ 語言偵測異常（{detected_language}），請檢查內容合理性")
+
+                # 📝 記錄有效結果
                 all_transcripts.append(transcript)
-                
-                logger.info(f"第 {i} 個片段轉錄完成，長度: {len(transcript)} 字符")
-                
+                logger.info(f"第 {i} 段轉錄完成（語言: {detected_language}，長度: {len(transcript)}）")
+
             except Exception as e:
-                logger.error(f"轉錄第 {i} 個片段時出錯: {str(e)}")
+                logger.error(f"轉錄第 {i} 段時出錯: {str(e)}")
                 continue
-            
             finally:
-                # 刪除臨時片段文件
                 try:
                     os.remove(segment_path)
                 except:
                     pass
-        
-        # 合併所有轉錄結果
+
+
         final_transcript = merge_transcripts(all_transcripts)
-        
-        # 儲存完整轉錄結果
+
+        # 儲存結果
         if output_dir:
             try:
                 with open(transcript_path, 'w', encoding='utf-8') as f:
-                    f.write(f"來源：語音辨識\n")
-                    f.write(f"檢測到的語言: {first_detected_language}\n\n")
-                    f.write(final_transcript)
-                logger.info(f"已將轉錄結果儲存至：{transcript_path}")
+                    f.write("來源：Faster-Whisper 語音辨識\n")
+                    if track_languages:
+                        lang_counter = {lang: per_segment_languages.count(lang) for lang in set(per_segment_languages)}
+                        f.write(f"語言切換統計：{lang_counter}\n")
+                        for idx, (text, lang) in enumerate(zip(all_transcripts, per_segment_languages)):
+                            f.write(f"\n[{lang}] 段落 {idx+1}:\n{text.strip()}\n")
+                    else:
+                        f.write(f"\n偵測語言（首段）: {per_segment_languages[0] if per_segment_languages else '未知'}\n\n")
+                        f.write(final_transcript)
+                logger.info(f"轉錄結果已儲存至：{transcript_path}")
             except Exception as e:
-                logger.warning(f"保存轉錄結果時出錯：{str(e)}")
-        
-        # 清理臨時目錄
+                logger.warning(f"儲存轉錄時出錯：{str(e)}")
+
+        # 清理暫存
         temp_dir = os.path.join(os.path.dirname(audio_path), "temp_segments")
         try:
             os.rmdir(temp_dir)
         except:
             pass
-        
+
         return final_transcript
-        
+
     except Exception as e:
         logger.error(f"轉錄音訊時出錯: {str(e)}")
         return ""
     finally:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+def is_excessive_repetition(text: str, phrase_threshold: int = 20, length_threshold: float = 0.8):
+    """
+    檢查轉錄文本是否存在過度重複的三字詞片段。
+    如果某句重複出現次數 ≥ phrase_threshold 或佔比 ≥ length_threshold，
+    返回 True，否則返回 False。
+    """
+    words = text.split()
+    total_len = len(words)
+    if total_len < 6:
+        return False  # 太短不判定
+
+    phrase_counts = {}
+    for i in range(total_len - 2):
+        phrase = " ".join(words[i:i+3])
+        phrase_counts[phrase] = phrase_counts.get(phrase, 0) + 1
+
+    max_phrase = max(phrase_counts, key=phrase_counts.get, default=None)
+    if max_phrase:
+        count = phrase_counts[max_phrase]
+        ratio = (count * 3) / total_len  # 該短語所佔比例
+        # Debug 輸出
+        print(f"[DEBUG] Most repeated phrase: '{max_phrase}' appears {count} times, ratio: {ratio:.2f}")
+        if count >= phrase_threshold or ratio >= length_threshold:
+            return True
+    return False
+
+
 
 def compute_text_embedding(text: str) -> torch.Tensor:
     """計算文本的嵌入向量"""

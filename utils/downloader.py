@@ -95,7 +95,7 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
         'retries': max_retries,
         'noplaylist': True,  # 禁用播放清單下載
         'extract_flat': False,  # 不提取播放清單資訊
-        'writeautomaticsub': True,  # 禁止下載自動生成的字幕
+        'writeautomaticsub': False,  # 禁止下載自動生成的字幕
         'writesubtitles': True,     # 下載手動上傳的字幕
         'subtitlesformat': 'vtt',
         'subtitleslangs': ['all'],  # 排除 live chat
