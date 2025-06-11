@@ -1,5 +1,6 @@
 import os
 import sys
+import gc
 import time
 import torch
 import psutil
@@ -30,7 +31,8 @@ AUDIO_CONFIG = {
     'channels': 1,
     'audio_bitrate': '192k',
     'format': 'wav',
-    'codec': 'pcm_s16le'
+    'codec': 'pcm_s16le',
+    'force_gpu': False  # 强制使用 GPU
 }
 
 # 特征提取参数
@@ -97,7 +99,7 @@ CROP_CONFIG = {
 }
 
 # =============== 全局变量初始化 ===============
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() and AUDIO_CONFIG['force_gpu'] else 'cpu')
 logger.info(f"使用設備: {device}")
 
 # 初始化 PANN 模型
@@ -144,9 +146,11 @@ def get_openl3_model():
         openl3_model = torchopenl3.models.load_audio_embedding_model(
             input_repr="mel128",
             content_type="music",
-            embedding_size=512,
-            device=device
+            embedding_size=512
         )
+        openl3_model = openl3_model.to(device)
+        if device.type == 'cuda':
+            openl3_model = torch.nn.DataParallel(openl3_model)  # 使用多 GPU 支持
         openl3_model.eval()
     return openl3_model
 
@@ -167,6 +171,13 @@ def extract_openl3_features(audio_path: str) -> Optional[np.ndarray]:
             verbose=False
         )
         # emb.shape: (T, 512)
+        if isinstance(emb, torch.Tensor):
+            emb = emb.cpu().numpy()
+            
+        # 清理 GPU 内存
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+            
         return np.mean(emb, axis=0).astype(np.float32)
     except Exception as e:
         logger.error(f"OpenL3 特徵提取失敗 {audio_path}: {str(e)}")
@@ -176,8 +187,18 @@ def get_pann_model():
     """獲取或初始化 PANN 模型"""
     global pann_model
     if pann_model is None:
-        pann_model = Cnn14(sample_rate=AUDIO_CONFIG['sample_rate'], window_size=1024, hop_size=320, mel_bins=64, fmin=50, fmax=14000)
+        pann_model = Cnn14(
+            sample_rate=AUDIO_CONFIG['sample_rate'],
+            window_size=1024,
+            hop_size=320,
+            mel_bins=64,
+            fmin=50,
+            fmax=14000,
+            classes_num=527
+        )
         pann_model = pann_model.to(device)
+        if device.type == 'cuda':
+            pann_model = torch.nn.DataParallel(pann_model)  # 使用多 GPU 支持
         pann_model.eval()
     return pann_model
 
@@ -193,8 +214,12 @@ def extract_pann_features(audio_path: str) -> Optional[np.ndarray]:
         
         # 提取特徵
         with torch.no_grad():
-            features = model(waveform.unsqueeze(0))
-            features = features.cpu().numpy()
+            output_dict = model(waveform.unsqueeze(0))
+            features = output_dict['embedding'].cpu().numpy()
+        
+        # 清理 GPU 内存
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
         
         return features.squeeze()[:2048]  # 保證回傳是 1D 向量
         
