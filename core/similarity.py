@@ -1,3 +1,4 @@
+# ======================== 📦 模組與依賴 ========================
 import os
 import torch
 import numpy as np
@@ -8,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from core.audio_processor import audio_similarity
 from core.image_processor import video_similarity
 
-
+# ======================== 📂 檔案驗證與前處理 ========================
 def check_files_exist(files: Union[str, List[str]], check_size: bool = True) -> bool:
     """
     檢查文件是否存在且有效
@@ -66,6 +67,7 @@ def get_video_id_from_path(file_path: str) -> str:
     else:  # 影片或音頻文件
         return os.path.splitext(basename)[0]
 
+# ======================== 🎯 相似度計算主流程 ========================
 def calculate_overall_similarity(audio1: str, audio2: str,
                                image1: Union[str, List[str]], image2: Union[str, List[str]],
                                text1: str, text2: str,
@@ -193,6 +195,7 @@ def calculate_overall_similarity(audio1: str, audio2: str,
         "text_status": reason
     }
 
+# ======================== 📊 結果輸出與顯示 ========================
 def display_similarity_results(reference_link: str, comparison_results: List[Dict[str, Union[str, float]]]):
     """
     顯示相似度比對結果

@@ -1,7 +1,7 @@
-import logging
 import os
 import sys
 import time
+import logging
 
 # 創建日誌目錄
 log_dir = "logs"

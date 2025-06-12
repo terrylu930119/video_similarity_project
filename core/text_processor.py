@@ -1,26 +1,22 @@
+# ======================== 📦 模組與依賴 ========================
 import gc
 import os
 import re
 import torch
-import whisper
 import torchaudio
 from math import ceil
-from itertools import groupby
-from collections import Counter
 from utils.logger import logger
-from utils.gpu_utils import gpu_manager
-from core.audio_processor import load_audio
+from faster_whisper import WhisperModel
 from concurrent.futures import ThreadPoolExecutor
 from utils.downloader import generate_safe_filename
-from sentence_transformers import SentenceTransformer, util
 from utils.audio_cleaner import load_and_clean_audio
-from faster_whisper import WhisperModel
+from sentence_transformers import SentenceTransformer, util
 
-
-# 全域模型變數
+# ======================== ⚙️ 全域模型 ========================
 _whisper_model = None
 _sentence_transformer = None
 
+# ======================== 📥 模型載入函式 ========================
 def get_whisper_model():
     """取得或載入 faster-whisper 模型"""
     global _whisper_model
@@ -48,6 +44,7 @@ def get_sentence_transformer():
         logger.info("SentenceTransformer 模型載入完成")
     return _sentence_transformer
 
+# ======================== 🌐 URL 與字幕處理 ========================
 def get_subtitle_language(filename: str) -> str:
     """
     從字幕文件名中提取語言代碼
@@ -192,115 +189,14 @@ def extract_subtitles(video_url: str, output_dir: str) -> str:
         logger.error(f"提取字幕時出錯: {str(e)}")
         return ""
 
-# legacy use: 保留舊版後處理邏輯，預設流程中不再呼叫
-def post_process_transcript(text: str, language: str = None) -> str:
+# ======================== 🧼 後處理與清理邏輯 ========================
+def merge_transcripts(transcripts: list) -> str:
     """
-    後處理轉錄文本，處理重複和格式化問題
-    
-    參數:
-        text: 原始轉錄文本
-        language: 語言代碼（'ja', 'zh', 'en' 等）
+    合併多個轉錄文本
     """
-    if not text:
-        return text
+    return " ".join(filter(None, transcripts))
 
-    # 定義語言特定的標點符號和規則
-    LANGUAGE_RULES = {
-        'ja': {
-            'sentence_end': '。！？',
-            'comma': '、',
-            'particles': 'はがでにとへもを',
-            'end_mark': '。',
-            'comma_mark': '、'
-        },
-        'zh': {
-            'sentence_end': '。！？',
-            'comma': '，、',
-            'particles': '的地得了著過',
-            'end_mark': '。',
-            'comma_mark': '，'
-        },
-        'en': {
-            'sentence_end': '.!?',
-            'comma': ',',
-            'particles': 'and or but in on at with to',
-            'end_mark': '.',
-            'comma_mark': ','
-        }
-    }
-    
-    # 獲取語言規則，如果沒有特定規則則使用英文規則
-    rules = LANGUAGE_RULES.get(language, LANGUAGE_RULES['en'])
-    
-    def remove_consecutive_duplicates(text):
-        """移除連續重複的內容"""
-        # 根據語言選擇分割方式
-        if language in ['ja', 'zh']:  # 中日文按字符分割
-            words = list(text)
-        else:  # 其他語言按空格分割
-            words = text.split()
-        
-        # 移除連續重複，但保留有意義的重複（如擬聲詞）
-        result = []
-        for word, group in groupby(words):
-            count = len(list(group))
-            # 如果是短詞（1-2字符）且重複次數小於等於3，保留重複
-            if (len(word) <= 2 and count <= 3) or count == 1:
-                result.extend([word] * count)
-            else:
-                result.append(word)
-        
-        # 重新組合文本
-        if language in ['ja', 'zh']:
-            return ''.join(result)
-        return ' '.join(result)
-    
-    def remove_long_duplicates(text):
-        """移除長片段重複"""
-        # 對於不同語言使用不同的最小長度
-        min_length = 2 if language in ['ja', 'zh'] else 3
-        max_length = 20
-        
-        for length in range(max_length, min_length, -1):
-            pattern = f'(.{{{length}}})\\1+'
-            text = re.sub(pattern, r'\1', text)
-        return text
-    
-    def add_punctuation(text):
-        """添加適當的標點符號"""
-        # 在句子結尾添加句號
-        end_pattern = f'([^{rules["sentence_end"]}\\s])([^\\w{rules["sentence_end"]}]*)$'
-        text = re.sub(end_pattern, f'\\1{rules["end_mark"]}\\2', text)
-        
-        # 在自然停頓處添加逗號
-        if language in ['ja', 'zh']:
-            # 在特定助詞前添加逗號
-            particle_pattern = f'([^{rules["comma"]}{rules["sentence_end"]}\\s])([{rules["particles"]}])'
-            text = re.sub(particle_pattern, f'\\1{rules["comma_mark"]}\\2', text)
-        else:
-            # 在連接詞前添加逗號
-            for particle in rules["particles"].split():
-                text = re.sub(f'\\s+{particle}\\s+', f'{rules["comma_mark"]} {particle} ', text)
-        
-        return text
-    
-    # 執行處理步驟
-    text = remove_consecutive_duplicates(text)
-    text = remove_long_duplicates(text)
-    text = add_punctuation(text)
-    
-    # 最後的清理
-    # 移除多餘的空格
-    if language in ['ja', 'zh']:
-        text = re.sub(r'\s+', '', text)
-    else:
-        text = re.sub(r'\s+', ' ', text)
-    
-    # 移除重複的標點符號
-    text = re.sub(f'[{rules["sentence_end"]}{rules["comma"]}]+', lambda m: m.group(0)[0], text)
-    
-    return text.strip()
-
+# ======================== 🔊 音訊分段處理 ========================
 def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, overlap: int = 2, use_silence_detection: bool = True, merge_gap_threshold: int = 1000, min_segment_duration: int = 3) -> list:
     """
     將音頻分割成小片段用於轉錄，支持重疊處理和靜音斷點切割
@@ -433,12 +329,7 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
             torch.cuda.empty_cache()
         gc.collect()  # 強制垃圾回收
 
-def merge_transcripts(transcripts: list) -> str:
-    """
-    合併多個轉錄文本
-    """
-    return " ".join(filter(None, transcripts))
-
+# ======================== 📝 音訊轉錄流程 ========================
 def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = None,
                      use_silence_detection: bool = True, merge_gap_threshold: int = 1000,
                      min_segment_duration: int = 3, use_source_separation: bool = True,
@@ -590,6 +481,7 @@ def transcribe_audio(audio_path: str, video_url: str = None, output_dir: str = N
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+# ======================== 🔍 重複判斷與濾除邏輯 ========================
 def is_excessive_repetition(text: str, phrase_threshold: int = 20, length_threshold: float = 0.8):
     """
     檢查轉錄文本是否存在過度重複的三字詞片段。
@@ -616,8 +508,7 @@ def is_excessive_repetition(text: str, phrase_threshold: int = 20, length_thresh
             return True
     return False
 
-
-
+# ======================== 📊 文本分析與比對 ========================
 def compute_text_embedding(text: str) -> torch.Tensor:
     """計算文本的嵌入向量"""
     try:
