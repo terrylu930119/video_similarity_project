@@ -1,172 +1,214 @@
-# 影片相似度比對系統
+# Video Similarity Project – 多模態影片相似度比對與侵權偵測系統
 
 ## 專案簡介
 
-這是一個多模態影片相似度比對系統，能夠分析各種網站的影片的視覺、音頻和文本內容，計算不同影片之間的相似度。系統採用深度學習和傳統計算機視覺技術，提供全面的相似度評估。目前主要支援 YouTube 和 Bilibili 等主流視頻平台的影片比對。
+Video Similarity Project 是一個多模態的影片相似度比對系統，整合了視覺、音訊和文字分析技術來評估兩支影片之間的相似程度。該系統運用深度學習模型與傳統計算機視覺方法，從畫面內容、聲音特徵以及語音轉錄文本等多角度進行比較，幫助使用者偵測影片內容的重複或侵權情形。現在已支持對 YouTube、Bilibili 等主流影音平台影片的比對分析。
 
 ## 功能特點
 
-- **多模態分析**：
-  - 視覺分析：使用 OpenCV 和 scikit-image 進行圖像處理和特徵提取
-  - 音頻分析：使用 librosa 和 soundfile 進行音頻特徵提取
-  - 文本分析：使用 Whisper 進行語音識別和文本相似度計算
+- **多模態分析**：同時分析影片的畫面、音訊和字幕內容，提高比對準確度。
+  - 視覺分析：提取影片關鍵幀，計算圖像哈希與深度特徵向量，比較畫面相似度。
+  - 音頻分析：提取音頻梅爾頻譜、節奏等特徵及深度音訊嵌入，比較背景音樂或講話聲音相似度。
+  - 文本分析：透過 Whisper 將講話內容轉寫為文本，計算語意相似度，比較影片主題內容。
 
-- **影片下載與處理**：
-  - 支援 YouTube、Bilibili 等多個主流視頻平台
-  - 使用 yt-dlp 作為主要下載引擎
-  - 支援自定義視頻解析度和幀提取間隔
+- **影片下載與處理**：內建影片下載模組，支援 YouTube、Bilibili 等多平台影片來源，使用 yt-dlp 作為下載引擎。可自定義下載影片解析度，並將影片按指定時間間隔抽取影像幀進行分析。
 
-- **性能優化**：
-  - GPU 加速支援（使用 PyTorch）
-  - 並行處理架構
-  - 智能緩存機制避免重複處理
+- **性能優化**：支援 GPU 加速與多執行緒並行處理。採用快取機制避免重複下載和重複計算特徵，大幅減少處理時間。對長影片自動進行分段分析，降低記憶體消耗風險。
 
-- **相似度計算**：
-  - 多維度特徵融合
-  - 可調整的權重配置
-  - 詳細的相似度分析報告
+- **相似度評估報告**：輸出詳細的相似度分析結果，包括音訊相似度、畫面相似度、文本相似度，以及加權計算的綜合相似度分數。對於文本內容無意義的情況，系統會自動標註並調整文字相似度權重，確保結果可靠。
 
 ## 技術架構
 
-系統由以下主要模組組成：
+專案採用模組化架構，主要組成部分如下：
 
-- **main.py**：主程式入口，協調各模組工作
-- **downloader.py**：影片下載模組，支援多平台
-- **video_utils.py**：視頻處理工具，負責幀提取
-- **audio_processor.py**：音頻處理模組，特徵提取
-- **text_processor.py**：文本處理模組，語音識別
-- **image_processor.py**：圖像處理模組，視覺特徵提取
-- **similarity.py**：相似度計算核心模組
-- **gpu_utils.py**：GPU 資源管理
-- **logger.py**：日誌記錄系統
-- **dependencies.py**：依賴項管理
+- **主程式 (main.py)**：命令列介面入口，負責參數解析和流程控制，協調各模組完成比對。
 
-## 安裝方法
+- **下載器 (utils/downloader.py)**：提供 download_video(url, output_dir) 方法，使用 yt-dlp 下載影片並存為本地檔案，順便下載字幕與影片資訊。
 
-### 系統要求
+- **影片工具 (utils/video_utils.py)**：提供影片基本資訊獲取和幀提取功能。例如 get_video_info 獲取總幀數和FPS；extract_frames 調用 FFmpeg 抽取視頻幀並保存到磁碟。
 
-- Python 3.8+
-- CUDA 支援（可選，用於 GPU 加速）
-- FFmpeg（用於音頻和視頻處理）
+- **音頻處理 (core/audio_processor.py)**：負責從影片中提取音訊特徵。包括將影片轉為音訊、提取 MFCC、色度圖等傳統特徵，以及使用預訓練模型獲得深度音訊向量（OpenL3、PANN）等。最終提供 audio_similarity(path1, path2) 計算兩音訊檔的相似度。
 
-### 安裝步驟
+- **圖像處理 (core/image_processor.py)**：負責影像特徵計算與視頻相似度。包括感知哈希計算函式 compute_phash 用於快速比較影像相似；以及使用 MobileNet 提取圖像深度特徵向量。提供 video_similarity(frames_list1, frames_list2, duration) 來綜合計算兩影片畫面的相似度。
 
-1. 克隆專案倉庫：
+- **文本處理 (core/text_processor.py)**：負責語音轉錄與文字比對。使用 Faster-Whisper 模型將影片音訊轉為文字（自動偵測語言並分段避免長音訊問題），再用 SentenceTransformer 計算文字語意相似度。提供 transcribe_audio(audio_path, ...) 取得轉錄文本，text_similarity(text1, text2) 返回文本相似度分數。
+
+- **相似度整合 (core/similarity.py)**：綜合各模態計算最終相似度的模組。函式 calculate_overall_similarity(audio1, audio2, frames1, frames2, text1, text2, video_duration) 將音訊、影像、文字的相似度按照可配置權重加權平均，計算出綜合相似度。同時提供 display_similarity_results 將結果以易讀表格形式列出。
+
+- **日誌與環境 (utils/logger.py, utils/dependencies.py)**：提供統一的日誌記錄器，用於輸出資訊、警告和錯誤訊息；依賴檢查模組會在程式啟動時檢查 ffmpeg、yt-dlp、CUDA 等環境是否可用。
+
+## 專案結構
+
+```
+video_similarity_project/
+├─ core/               # 核心處理模組
+│   ├─ audio_processor.py      # 音頻特徵提取與相似度計算
+│   ├─ image_processor.py      # 圖像特徵提取與相似度計算
+│   ├─ text_processor.py       # 語音轉錄與文字相似度計算
+│   └─ similarity.py           # 多模態相似度融合與結果輸出
+├─ utils/              # 實用工具模組
+│   ├─ downloader.py           # 影片下載與命名工具
+│   ├─ video_utils.py          # 幀提取、影片資訊獲取
+│   ├─ audio_cleaner.py        # 音訊過濾（如降噪、靜音偵測）*(若存在)*
+│   ├─ gpu_utils.py            # GPU 記憶體管理工具
+│   ├─ logger.py               # 日誌紀錄設定
+│   └─ dependencies.py         # 執行環境依賴檢查
+├─ panns_inference/     # 第三方預訓練模型相關程式 (PANN 音訊模型)
+│   ├─ inference.py            # 簡易推理介面
+│   ├─ models.py               # 模型架構定義 (CNN14 等)
+│   ├─ pytorch_utils.py        # PANN 模型所需的 PyTorch 工具
+│   └─ config.py               # PANN 模組配置
+├─ downloads/          # *執行後產生:* 影片與幀暫存資料夾（可自定義路徑）
+├─ feature_cache/      # *執行後產生:* 音訊特徵快取資料夾（可自定義路徑）
+├─ requirements.txt    # Python 相依套件清單
+└─ README.md           # 說明文件 (本檔案)
+```
+
+## 安裝與環境需求
+
+### 環境要求：
+- Python 3.8 或以上版本
+- 建議具備 NVIDIA GPU 以及已安裝 CUDA 11+ 和 cuDNN，以使用GPU加速
+- 已安裝 FFmpeg 工具（用于视频和音频處理）
+- 已安裝 yt-dlp 工具（用于下載影片）
+
+### 安裝步驟：
+
+1. 取得程式碼：克隆此專案倉庫至本地
    ```bash
-   git clone https://github.com/yourusername/video_similarity_project.git
+   git clone https://github.com/terrylu930119/video_similarity_project.git
    cd video_similarity_project
    ```
 
-2. 創建並啟動虛擬環境：
+2. 建立虛擬環境（可選）：為避免依賴衝突，建議創建 Python 虛擬環境
    ```bash
-   python -m venv .venv
-   # Windows
-   .venv\Scripts\activate
-   # Linux/Mac
-   source .venv/bin/activate
+   python -m venv venv
+   source venv/bin/activate   # Linux/Mac 使用
+   venv\Scripts\activate      # Windows 使用
    ```
 
-3. 安裝依賴項：
+3. 安裝依賴套件：使用 pip 安裝所需的 Python 套件
    ```bash
    pip install -r requirements.txt
    ```
 
-4. 安裝 FFmpeg：
-   - Windows：使用 [FFmpeg 官方網站](https://ffmpeg.org/download.html) 下載並添加到 PATH
-   - Linux：`sudo apt-get install ffmpeg`
-   - Mac：`brew install ffmpeg`
+注意：首次執行時，程式會自動下載所需的機器學習模型（Whisper 等，約數百MB至1GB），請確保網路通暢。
 
-## 使用方法
+### 準備外部工具：
+確認已安裝以下系統軟體並在 PATH 中：
+- FFmpeg：視頻處理工具。如未安裝，請參考其官方說明。在 Linux 上可用 apt-get install ffmpeg 安裝。
+- yt-dlp：多平台視頻下載工具。如未安裝，可執行 pip install yt-dlp 安裝最新版本。
 
-### 基本用法
+## 使用方式
 
-1. 修改 `main.py` 中的參考影片和比對影片連結：
-   ```python
-   reference_link = "參考影片網址"
-   comparison_links = [
-       "需要被比對的影片1網址",
-       "需要被比對的影片2網址",
-       ....
-   ]
-   ```
+安裝完成後，可通過命令列介面使用本工具：
 
-2. 運行主程式：
-   ```bash
-   python main.py
-   ```
+### 基本用法：
+在終端執行 main.py 並提供參考影片和一個或多個要比對的影片連結：
+```bash
+python main.py --ref <參考影片URL> --comp <待比對影片URL1> <待比對影片URL2> ... [選項]
+```
 
-### 進階配置
+### 必填參數：
+- `--ref`：參考影片的網址 (URL)
+- `--comp`：一個或多個欲比對影片的網址，可以提供多個
 
-- **調整處理參數**：
-  ```python
-  time_interval = 1.0  # 幀提取間隔（秒）
-  resolution = "720p"  # 視頻解析度
-  use_silence_detection = True  # 是否使用靜音檢測
-  use_source_separation = True  # 是否使用音源分離
-  ```
+### 選用參數：
+- `--output`：指定下載及處理的輸出目錄，預設為 downloads
+- `--cache`：指定特徵快取目錄，預設為 feature_cache
+- `--interval`：幀提取的時間間隔（秒），預設 2.0 秒截取一幀
+- `--keep`：加入此參數則保留中間下載的影音及提取的特徵文件（不自動刪除）
 
-- **調整相似度權重**：
-  在 `similarity.py` 中修改權重配置：
-  ```python
-  weights = {
-      'visual': 0.4,
-      'audio': 0.3,
-      'text': 0.3
-  }
-  ```
+例如，要將參考影片與兩支影片進行比對，可執行：
+```bash
+python main.py --ref "https://www.youtube.com/watch?v=xxxxxxxx" \
+               --comp "https://www.youtube.com/watch?v=yyyyyyyy" "https://www.bilibili.com/video/BVXXXXX"
+```
 
-## 相似度計算方法
+### 結果解讀：
+比對完成後，終端輸出表格包含每個待比對影片相對於參考影片的相似度分數，例如：
 
-系統使用多層次的特徵提取和相似度計算：
+```
+=== 相似度比對結果 ===
+參考影片: https://youtu.be/abc123...
 
-1. **視覺相似度**：
-   - 使用 OpenCV 進行圖像預處理
-   - 應用深度學習模型提取視覺特徵
-   - 計算圖像哈希和特徵向量相似度
+比對結果:
+------------------------------------------------------------------------------------------------------------
+影片連結                                                    音訊相似度   畫面相似度   內容相似度   綜合相似度
+------------------------------------------------------------------------------------------------------------
+https://youtu.be/def456...                                   0.8457       0.9123       0.0000*      0.8804
+https://www.bilibili.com/video/BVXXXXX...                    0.6578       0.7012       0.7345       0.6939
+------------------------------------------------------------------------------------------------------------
 
-2. **音頻相似度**：
-   - 使用 librosa 提取音頻特徵
-   - 分析頻譜特徵和節奏模式
-   - 計算音頻特徵向量相似度
+註: * 表示該影片的文本內容被判定為無意義，其文本相似度權重已被重新分配到音訊和畫面相似度
+```
 
-3. **文本相似度**：
-   - 使用 Whisper 進行語音識別
-   - 應用 sentence-transformers 計算文本相似度
-   - 考慮文本的語義相似度
+如上所示，每列包括：影片連結、音訊相似度、畫面相似度、內容(文本)相似度、以及加權後的綜合相似度。星號 * 表示該影片文本被認為無意義（例如靜音或內容無關），因此文字相似度未計入綜合分數。
 
-## 注意事項
+## 資料夾與模組說明
 
-- 首次運行會下載必要的模型文件（約 1GB）
-- GPU 加速可顯著提升處理速度
-- 系統會自動清理臨時文件
-- 支援中斷處理和資源清理
-- 建議使用穩定的網絡連接
+- **downloads/**：預設的影片下載及處理輸出目錄。執行比對時，下載的原始影片文件、擷取的幀圖片、轉錄的字幕文字等都儲存在此資料夾下（按照影片ID區分子目錄）。如果不加 --keep 參數，程式在完成後會自動清理此資料夾。
 
-## 已知限制
+- **feature_cache/**：預設的音訊特徵快取目錄。音頻分析模組會將提取的特徵向量快取到此，例如 .npy 或 .pkl 檔案，以加速重複影片的比對。同樣地，若未指定 --keep，程式結束時會刪除此目錄釋放空間。
 
-- 目前主要支援 YouTube 和 Bilibili
-- 長視頻處理時間較長
-- 需要較大的硬碟空間用於臨時文件
-- 某些網站可能需要配置代理
+- **core/**：核心代碼所在目錄，包含多模態分析的主要程式碼：
+  - audio_processor.py：音訊處理模組，包含音訊特徵提取函式（如 MFCC、chroma）、深度模型提取（PANN, OpenL3）及 audio_similarity 計算函式。
+  - image_processor.py：圖像處理模組，提供 compute_phash、compute_batch_embeddings 等函式計算影像哈希與深度特徵，以及兩階段的 video_similarity 計算流程。
+  - text_processor.py：文本處理模組，提供音訊轉錄函式 transcribe_audio（內部調用 Whisper 模型）和文本相似度計算函式 text_similarity（調用 sentence-transformers 模型計算語意相似度）。
+  - similarity.py：相似度融合模組，定義 calculate_overall_similarity 將音訊、圖像、文本相似度按照權重合成總分，並包含結果格式化輸出的函式。
 
-## 未來計劃
+- **utils/**：工具類模組目錄，提供整個系統運作所需的輔助功能：
+  - downloader.py：影片下載與命名工具，使用 yt-dlp 實現下載，並提供生成安全文件名的方法。
+  - video_utils.py：視頻相關工具，負責驗證影片文件、提取幀影像、取得影片基本資訊等。
+  - audio_cleaner.py：音訊預處理工具，用於消除靜音片段或背景噪音等（假如存在此檔，根據需要清理音訊訊號，提高後續特徵提取的準確性）。
+  - gpu_utils.py：GPU 記憶體管理工具，可釋放顯存快取，以避免長時間運行佔用過多GPU記憶。
+  - logger.py：日誌模組，設定統一的 logger 用於打印資訊、警告、錯誤。方便在終端觀察處理流程和調試。
+  - dependencies.py：依賴檢查與安裝。提供檢查 ffmpeg/yt-dlp 是否安裝、CUDA 是否可用等函式，在啟動時被呼叫以提示使用者安裝缺失的依賴。
 
-- [ ] 支援更多視頻平台
-- [ ] 優化處理速度
-- [ ] 改進相似度算法
-- [ ] 添加 Web 界面
-- [ ] 支援批量處理
+- **panns_inference/**：內含預訓練環境音分類模型（PANN: Pretrained Audio Neural Networks）的相關程式碼。本專案使用其中的 Cnn14 模型來提取音訊的環境聲音特徵向量，用於輔助音訊相似度計算。該資料夾下包括模型定義、權重下載/載入以及推理所需的工具程式。
+
+### 其他文件：
+- requirements.txt：列出專案所需安裝的 Python 套件及版本。如 PyTorch、torchvision、librosa、yt-dlp、faster-whisper 等。
+- LICENSE：專案授權協議文件（默認為 MIT License）。
+- README.md：專案說明文檔，即本文件，提供使用指南和技術細節。
+
+## 未來可能的計劃
+
+此專案仍在持續改進中，以下是規劃中的一些新功能與優化方向：
+
+- 支援更多影片平台：擴充下載器以支援更多影音平台的影片網址（如 Vimeo、Facebook 等），增強適用範圍。
+- 提升處理速度：進一步優化算法和並行策略，例如利用多GPU同時計算、減少特徵維度以加快比對等，力求在保證準確率的前提下降低運算時間。
+- 改進相似度算法：探索更先進的影片指紋技術或深度學習比對模型，引入學習型的特徵融合策略，減少人工設定參數帶來的局限。
+- 開發圖形介面：提供友好的使用者介面，如 Web 儀表板或桌面應用，方便非技術用戶使用本工具上傳影片並查看結果。
+- 支援批量處理：允許使用者一次性提交大量影片做交叉比對，系統自動列出每對影片的相似度矩陣，方便進行資料庫重複內容掃描。
 
 ## 貢獻指南
 
-歡迎提交問題報告和改進建議！請遵循以下步驟：
+歡迎社群開發者一同參與本專案！如果您有新的想法、發現了問題或優化了程式，請按照以下步驟貢獻：
 
-1. Fork 專案倉庫
-2. 創建特性分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add some amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 開啟 Pull Request
+1. 在 GitHub 上 Fork 本倉庫，取得一份副本到您的帳戶下。
+2. 基於 main 分支創建一個新的開發分支：
+   ```bash
+   git checkout -b feature/YourFeatureName
+   ```
+3. 進行您的修改或新增功能，並適時提交代碼：
+   ```bash
+   git commit -m "Add: 說明您的修改內容"
+   ```
+4. 將您的分支推送到自己的 Fork 倉庫：
+   ```bash
+   git push origin feature/YourFeatureName
+   ```
+5. 前往原始倉庫建立 Pull Request，描述您的更改內容和動機。
 
-## 授權
+專案管理者會儘快審查您的更改，討論後合併或提出修改建議。
 
-本專案採用 MIT 授權 - 詳見 [LICENSE](LICENSE) 文件 
+在提交 Pull Request 之前，請確保您的程式通過基本測試，遵循專案的代碼風格，並附上必要的說明文件更新（如果您的更改影響了使用方式或模組介面）。
+
+## 授權與引用
+
+本專案採用 MIT 授權條款。這意味著您可以自由使用、修改和發布本程式碼，但需在程式的衍生版本中包含原始授權聲明和版權通知。
+
+如果您在學術研究中使用了本工具，歡迎在論文中引用本專案（您可以引用本 GitHub 倉庫 URL）。同時也鼓勵您與我們分享您的研究成果或反饋，以促進專案的持續改進。
+
+祝您使用愉快，期待您的貢獻！ 

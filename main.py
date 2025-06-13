@@ -108,8 +108,9 @@ def main():
     if len(sys.argv) == 1:
         # 預設測試參數（無 CLI 時）
         args = parser.parse_args([
-            '--ref', 'https://www.bilibili.com/video/BV18TjizGEAN/?spm_id_from=333.788.recommend_more_video.5&vd_source=6652d02982a20ea968442207129231f8',
-            '--comp', 'https://www.bilibili.com/video/BV1Nnj7zDE9i?spm_id_from=333.788.videopod.sections&vd_source=6652d02982a20ea968442207129231f8',
+            '--ref', 'https://www.youtube.com/watch?v=AK4TQ8fbVBk',
+            '--comp', 'https://www.bilibili.com/video/BV14CMWzSE9b/',
+                   'https://www.bilibili.com/video/BV1ypTZzME7T/',
             '--interval', '2.0',
             '--output', 'downloads',
             '--cache', 'feature_cache',
