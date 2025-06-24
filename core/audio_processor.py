@@ -37,7 +37,7 @@ FEATURE_CONFIG = {
 
 SIMILARITY_WEIGHTS = {
     'dl_features': 1.5,       # 比對深度學習模型提取的高層特徵，包含音色、音質等複雜特徵
-    'pann_features': 1.2,     # 比對音頻場景分類特徵，用於識別環境音和背景音
+    'pann_features': 1.4,     # 比對音頻場景分類特徵，用於識別環境音和背景音
     'openl3_features': 1.7,   # 比對音頻嵌入向量，捕捉音頻的語義信息
     'openl3_chunkwise': 0.5,  # chunkwise DTW 結構相似度
     'onset': 1.0,             # 比對音頻的起始點和節奏變化點
@@ -49,6 +49,7 @@ SIMILARITY_WEIGHTS = {
 
 THREAD_CONFIG = {'max_workers': 6}
 CROP_CONFIG = {'min_duration': 30.0, 'max_duration': 300.0, 'overlap': 0.5, 'silence_threshold': -14}
+_pca_registry = {}
 
 # =============== 初始化模型與資源 ===============
 FEATURE_CACHE_DIR = os.path.join(os.getcwd(), "feature_cache")
@@ -225,8 +226,42 @@ def load_audio_features_from_cache(audio_path: str) -> Optional[Dict[str, any]]:
 
 def perceptual_score(sim_score: float) -> float:
     """高相似度 → gamma 趨近 1.2；低分拉大差異"""
-    gamma = 1.2 + 2.0 * (1 - sim_score)
+    gamma = 1.2 + 1.0 * (1 - sim_score)
     return min(max(sim_score ** gamma, 0.0), 1.0)
+
+def fit_pca_if_needed(name: str, data: np.ndarray, n_components: int):
+    """若尚未訓練 PCA，則訓練並儲存"""
+    if name in _pca_registry:
+        return _pca_registry[name]
+    n_samples, dim = data.shape
+    n_components = min(n_components, n_samples, dim)
+    if n_components < 2:
+        return None  # 資料過少無法降維
+    pca = PCA(n_components=n_components)
+    pca.fit(data)
+    _pca_registry[name] = pca
+    return pca
+
+def apply_pca(name: str, vector: np.ndarray, n_components: int) -> np.ndarray:
+    """對單一向量或矩陣應用已訓練 PCA，若無則忽略"""
+    if vector.ndim == 1:
+        vector = vector.reshape(1, -1)
+    if name not in _pca_registry:
+        return vector.squeeze()
+    pca = _pca_registry[name]
+    reduced = pca.transform(vector)
+    return reduced.squeeze()
+
+def cos_sim(a: np.ndarray, b: np.ndarray) -> float:
+    """計算餘弦相似度，值域為 0 ~ 1"""
+    return (np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8) + 1) / 2
+
+def dtw_sim(a: np.ndarray, b: np.ndarray, max_length: int = 500) -> float:
+    """簡化的 DTW 相似度，較短樣本對齊比較用"""
+    a = a[:max_length]
+    b = b[:max_length]
+    cost = librosa.sequence.dtw(X=a.reshape(1, -1), Y=b.reshape(1, -1), metric='euclidean')[0]
+    return 1 / (1 + cost[-1, -1] / len(a))
 
 # =============== 特徵擷取與比較 ===============
 def extract_dl_features(audio_path: str, chunk_sec=10.0) -> Optional[np.ndarray]:
@@ -413,13 +448,11 @@ def chunkwise_dtw_sim(chunk1: np.ndarray, chunk2: np.ndarray, n_components=32) -
     if chunk1.shape[0] < 2 or chunk2.shape[0] < 2:
         return 0.0
     combined = np.vstack([chunk1, chunk2])
-    max_components = min(combined.shape[0], combined.shape[1], n_components)
-    if max_components < 2:
-        return 0.0  # 避免降維太少無法比較
-    pca = PCA(n_components=max_components)
-    reduced = pca.fit_transform(combined)
-    r1 = reduced[:chunk1.shape[0]]
-    r2 = reduced[chunk1.shape[0]:]
+    fit_pca_if_needed('openl3_chunkwise', combined, n_components=n_components)
+    r1 = apply_pca('openl3_chunkwise', chunk1, n_components=n_components)
+    r2 = apply_pca('openl3_chunkwise', chunk2, n_components=n_components)
+    if r1.ndim == 1 or r2.ndim == 1:  # 防止被 squeeze 掉維度
+        return cos_sim(r1, r2)
     cost = librosa.sequence.dtw(X=r1.T, Y=r2.T, metric='euclidean')[0]
     dtw_dist = cost[-1, -1]
     return 1 / (1 + dtw_dist / len(r1))
@@ -456,9 +489,6 @@ def compute_audio_features(audio_path: str, use_openl3=True) -> Optional[dict]:
 
 def compute_similarity(f1: dict, f2: dict) -> float:
     detailed_scores = {}
-    def cos_sim(a, b): return (np.dot(a, b) / (np.linalg.norm(a)*np.linalg.norm(b) + 1e-8) + 1) / 2
-    def dtw_sim(a, b): return 1 / (1 + dtw(a[:500], b[:500])[0][-1, -1] / 500)
-
     scores, weights = [], []
 
     if 'onset_env' in f1 and 'onset_env' in f2:
@@ -486,7 +516,7 @@ def compute_similarity(f1: dict, f2: dict) -> float:
         scores.append(combined_tempo_sim)
         weights.append(SIMILARITY_WEIGHTS.get('tempo', 1.0))
 
-    # 🔹 加入 OpenL3 chunkwise DTW 比對（若有）
+    # 加入 OpenL3 chunkwise DTW 比對（若有）
     if 'openl3_features' in f1 and 'openl3_features' in f2:
         o1 = f1['openl3_features']
         o2 = f2['openl3_features']
@@ -514,7 +544,15 @@ def compute_similarity(f1: dict, f2: dict) -> float:
                 split = 2048
                 emb1, tag1 = v1[:split], np.round(v1[split:])
                 emb2, tag2 = v2[:split], np.round(v2[split:])
-                sim1 = cos_sim(emb1, emb2)
+
+                # 加入降維訓練與應用
+                fit_pca_if_needed('pann_emb', np.stack([emb1, emb2]), n_components=128)
+                emb1_pca = apply_pca('pann_emb', emb1, n_components=128)
+                emb2_pca = apply_pca('pann_emb', emb2, n_components=128)
+
+                sim1 = cos_sim(emb1_pca, emb2_pca)
+
+                # tag 做 Jaccard
                 top1 = set(tag1.argsort()[-5:])
                 top2 = set(tag2.argsort()[-5:])
                 jaccard = len(top1 & top2) / len(top1 | top2) if top1 | top2 else 0.0
