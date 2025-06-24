@@ -3,12 +3,15 @@ import time
 import torch
 import numpy as np
 from PIL import Image
+from fastdtw import fastdtw
 from functools import lru_cache
 from utils.logger import logger
 from utils.gpu_utils import gpu_manager
+from scipy.spatial.distance import cosine
 import torchvision.transforms as transforms
 from typing import List, Dict, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
+from skimage.metrics import structural_similarity as ssim
 from torchvision.models import mobilenet_v3_large, MobileNet_V3_Large_Weights
 
 # ======================== 全域變數 ========================
@@ -152,6 +155,29 @@ def fast_similarity(feat1: Tuple[np.ndarray, np.ndarray, np.ndarray],
         return gray_sim * 0.5 + edge_sim * 0.3 + hsv_sim * 0.2
     return 0
 
+def dtw_similarity(emb_seq1: np.ndarray,
+                   emb_seq2: np.ndarray) -> float:
+    """使用 fastdtw 計算兩段嵌入序列的相似度 (0~1)"""
+    distance, _ = fastdtw(emb_seq1, emb_seq2, dist=cosine)
+    sim = 1.0 / (1.0 + distance / max(len(emb_seq1), len(emb_seq2)))
+    return sim
+
+def quick_ssim_check(img1_path: str, img2_path: str, thresh: float = 0.93) -> bool:
+    """Fast structural‑similarity check (grayscale)."""
+    try:
+        img1 = cv2.imread(img1_path)
+        img2 = cv2.imread(img2_path)
+        if img1 is None or img2 is None:
+            return False
+        if img1.shape != img2.shape:
+            img2 = cv2.resize(img2, (img1.shape[1], img1.shape[0]))
+        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+        score, _ = ssim(gray1, gray2, full=True)
+        return score >= thresh
+    except Exception as e:
+        logger.error(f"SSIM quick check error: {e}")
+        return False
 # =============== 影片相似度比對主流程 ===============
 def video_similarity(frames1: List[str], frames2: List[str],
                      video_duration: float,
@@ -160,11 +186,11 @@ def video_similarity(frames1: List[str], frames2: List[str],
     try:
         # 動態調整採樣與門檻
         if video_duration <= 60:
-            sample_interval, phash_threshold = 1, 0.6
+            sample_interval, phash_threshold = 1, 0.55
         elif video_duration <= 300:
-            sample_interval, phash_threshold = 2, 0.65
+            sample_interval, phash_threshold = 2, 0.6
         else:
-            sample_interval, phash_threshold = 3, 0.7
+            sample_interval, phash_threshold = 3, 0.65
 
         sampled_frames1 = frames1[::sample_interval]
         sampled_frames2 = frames2[::sample_interval]
@@ -178,26 +204,38 @@ def video_similarity(frames1: List[str], frames2: List[str],
 
         valid1 = [(f, p) for f, p in zip(sampled_frames1, phash1) if p is not None]
         valid2 = [(f, p) for f, p in zip(sampled_frames2, phash2) if p is not None]
-
         if not valid1 or not valid2:
             return {"similarity": 0.0}
 
-        similar_pairs = []
+        similar_pairs: List[Tuple[str, str]] = []
         phash_similarities = []
         for f1, p1 in valid1:
-            max_sim = 0
-            best = None
+            max_sim = 0.0
+            best_match: Tuple[str, float] | None = None
             for f2, p2 in valid2:
                 sim = fast_similarity(p1, p2)
                 if sim > max_sim:
                     max_sim = sim
-                    best = (f2, sim)
+                    best_match = (f2, sim)
             phash_similarities.append(max_sim)
-            if best and best[1] >= phash_threshold:
-                similar_pairs.append((f1, best[0]))
+            if best_match and (
+                best_match[1] >= phash_threshold or quick_ssim_check(f1, best_match[0])
+            ):
+                similar_pairs.append((f1, best_match[0]))
 
-        avg_phash = np.mean(phash_similarities)
-        matched_ratio = len(similar_pairs) / len(valid1)
+        avg_phash = float(np.mean(phash_similarities)) if phash_similarities else 0.0
+        matched_ratio = len(similar_pairs) / len(valid1) if valid1 else 0.0
+
+        # --- fallback when too few similar pairs ---
+        if len(similar_pairs) < len(valid1) * 0.2:
+            logger.warning("Too few similar pairs, applying relaxed fallback matching.")
+            similar_pairs = [
+                (f1, f2)
+                for (f1, p1) in valid1
+                for (f2, p2) in valid2
+                if fast_similarity(p1, p2) >= phash_threshold * 0.9
+            ]
+            matched_ratio = len(similar_pairs) / len(valid1) if valid1 else 0.0
 
         if not similar_pairs:
             return {
@@ -205,7 +243,7 @@ def video_similarity(frames1: List[str], frames2: List[str],
                 "filtered_similarity": 0.0,
                 "similar_pairs": 0,
                 "total_pairs": len(valid1),
-                "phash_threshold": phash_threshold
+                "phash_threshold": phash_threshold,
             }
 
         #  ──────────────── 第二階段：深度特徵比對  ────────────────
@@ -214,23 +252,42 @@ def video_similarity(frames1: List[str], frames2: List[str],
 
         if e1 is None or e2 is None:
             return {"similarity": 0.0}
-
+        
         e1 /= np.linalg.norm(e1, axis=1, keepdims=True) + 1e-8
         e2 /= np.linalg.norm(e2, axis=1, keepdims=True) + 1e-8
 
         sim_matrix = np.dot(e1, e2.T)
         deep_sim = float(np.mean(np.max(sim_matrix, axis=1)))
 
+        # --------- 取得「完整序列」嵌入，用於 DTW ---------
+        seq_emb1 = compute_batch_embeddings(sampled_frames1, batch_size)
+        seq_emb2 = compute_batch_embeddings(sampled_frames2, batch_size)
+
+        if seq_emb1 is not None and seq_emb2 is not None:
+            seq_emb1 /= np.linalg.norm(seq_emb1, axis=1, keepdims=True) + 1e-8
+            seq_emb2 /= np.linalg.norm(seq_emb2, axis=1, keepdims=True) + 1e-8
+            dtw_dist, _ = fastdtw(seq_emb1, seq_emb2, dist=cosine)
+            sim_dtw = 1.0 / (1.0 + dtw_dist / max(len(seq_emb1), len(seq_emb2)))
+        else:
+            sim_dtw = 0.0
+
+        # --------- 分數融合 ---------
+        combined_deep = matched_ratio * deep_sim + (1.0 - matched_ratio) * avg_phash
+        base_sim = 0.75 * combined_deep + 0.25 * sim_dtw
+
+        # softer penalty on unmatched coverage
         weight_factor = min(1.0, matched_ratio / 0.3)
-        final_sim = weight_factor * (matched_ratio * deep_sim + (1 - matched_ratio) * avg_phash)
+        final_sim = base_sim * (0.5 + 0.5 * weight_factor)
 
         return {
             "similarity": final_sim,
             "deep_similarity": deep_sim,
             "phash_similarity": avg_phash,
+            "dtw_similarity": sim_dtw,
+            "matched_ratio": matched_ratio,
             "similar_pairs": len(similar_pairs),
             "total_pairs": len(valid1),
-            "phash_threshold": phash_threshold
+            "phash_threshold": phash_threshold,
         }
 
     except Exception as e:
