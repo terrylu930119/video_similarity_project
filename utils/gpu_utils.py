@@ -41,7 +41,6 @@ class GPUManager:
     def clear_gpu_memory(self):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            logger.info("已清理 GPU 內存")
             
     def log_gpu_memory(self):
         if torch.cuda.is_available():

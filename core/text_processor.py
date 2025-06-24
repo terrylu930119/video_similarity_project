@@ -6,6 +6,7 @@ import librosa
 import torchaudio
 import numpy as np
 from math import ceil
+from tqdm import tqdm
 import soundfile as sf
 from utils.logger import logger
 from utils.gpu_utils import gpu_manager
@@ -208,7 +209,7 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
                     continue
                 seg_path = os.path.join(temp_dir, f"segment_{seg_idx:03d}.wav")
                 sf.write(seg_path, segment, sr)
-                logger.info(f"[靜音分段] 已儲存片段 {seg_idx+1}，長度: {duration:.2f} 秒")
+                logger.debug(f"[靜音分段] 已儲存片段 {seg_idx+1}，長度: {duration:.2f} 秒")
                 segment_paths.append(seg_path)
                 seg_idx += 1
             if not segment_paths:
@@ -231,7 +232,7 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
                         print(f"[DEBUG] segment_{i:03d}: max={np.abs(segment).max():.4f} len={len(segment)}")
                     seg_path = os.path.join(temp_dir, f"segment_{i:03d}.wav")
                     sf.write(seg_path, segment, sr_)
-                    logger.info(f"已儲存片段 {i+1}/{num_segments}")
+                    logger.debug(f"已儲存片段 {i+1}/{num_segments}")
                     return seg_path
                 except Exception as e:
                     logger.error(f"片段 {i} 儲存失敗: {e}")
@@ -259,7 +260,7 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
                     segment = data[start:end]
                     seg_path = os.path.join(temp_dir, f"segment_{i:03d}.wav")
                     sf.write(seg_path, segment, sr_)
-                    logger.info(f"已儲存片段 {i+1}/{num_segments}")
+                    logger.debug(f"已儲存片段 {i+1}/{num_segments}")
                     return seg_path
                 except Exception as e:
                     logger.error(f"片段 {i} 儲存失敗: {e}")
@@ -271,6 +272,8 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
 
         if not segment_paths:
             logger.error("無有效音訊片段！")
+        else:
+            logger.info(f"音訊切割完成，共產生 {len(segment_paths)} 個片段")
         return segment_paths
 
     except Exception as e:
@@ -338,39 +341,38 @@ def transcribe_audio(audio_path: str, video_url: str | None = None, output_dir: 
     transcripts: list[str] = []
     seg_langs: list[str] = []
 
-    for idx, seg in enumerate(segments, 1):
-            logger.info(f"→ 轉錄片段 {idx}/{len(segments)}…")
+    for idx, seg in enumerate(tqdm(segments, desc="轉錄進度"), 1):
+        try:
+            seg_result, info = model.transcribe(
+                seg,
+                beam_size=5,
+                temperature=0.0,
+                vad_filter=False,
+                compression_ratio_threshold=5.0,
+                log_prob_threshold=-2.5,
+                no_speech_threshold=0.6,
+            )
+            seg_text = "".join([s.text for s in seg_result]).strip()
+            lang = info.language or "unknown"
+
+            # 語言異常警告
+            warn_if_language_abnormal(lang)
+
+            # 過短、重複、幻覺則跳過
+            if len(seg_text) < 10 or is_excessive_repetition(seg_text) or is_hallucination_phrase(seg_text):
+                if _debug_mode:
+                    print(f"片段 {idx} 質量不佳，略過…")
+                continue
+
+            transcripts.append(seg_text)
+            seg_langs.append(lang)
+        except Exception as e:
+            logger.error(f"片段 {idx} 轉錄錯誤: {e}")
+        finally:
             try:
-                seg_result, info = model.transcribe(
-                    seg,
-                    beam_size=5,
-                    temperature=0.0,
-                    vad_filter=False,
-                    compression_ratio_threshold=5.0,
-                    log_prob_threshold=-2.5,
-                    no_speech_threshold=0.6,
-                )
-                seg_text = "".join([s.text for s in seg_result]).strip()
-                lang = info.language or "unknown"
-
-                # 語言異常警告
-                warn_if_language_abnormal(lang)
-
-                # 過短、重複、幻覺則跳過
-                if len(seg_text) < 10 or is_excessive_repetition(seg_text) or is_hallucination_phrase(seg_text):
-                    logger.warning(f"片段 {idx} 質量不佳，略過…")
-                    continue
-
-                transcripts.append(seg_text)
-                seg_langs.append(lang)
-                logger.info(f"  完成 (語言={lang}, 長度={len(seg_text)})")
-            except Exception as e:
-                logger.error(f"片段 {idx} 轉錄錯誤: {e}")
-            finally:
-                try:
-                    os.remove(seg)
-                except Exception:
-                    pass
+                os.remove(seg)
+            except Exception:
+                pass
 
     final_txt = " ".join(transcripts)
 
@@ -395,6 +397,7 @@ def transcribe_audio(audio_path: str, video_url: str | None = None, output_dir: 
     except OSError:
         pass
 
+    logger.info(f"轉錄完成，共成功 {len(transcripts)} 段，語言分布: {dict((l, seg_langs.count(l)) for l in set(seg_langs))}")
     return final_txt
 
 # ======================== 重複判斷與濾除邏輯 ========================
@@ -419,7 +422,8 @@ def is_excessive_repetition(text: str, phrase_threshold: int = 20, length_thresh
         count = phrase_counts[max_phrase]
         ratio = (count * 3) / total_len  # 該短語所佔比例
         # Debug 輸出
-        print(f"[DEBUG] Most repeated phrase: '{max_phrase}' appears {count} times, ratio: {ratio:.2f}")
+        if _debug_mode:
+            print(f"[DEBUG] Most repeated phrase: '{max_phrase}' appears {count} times, ratio: {ratio:.2f}")
         if count >= phrase_threshold or ratio >= length_threshold:
             return True
     return False
@@ -472,7 +476,7 @@ def warn_if_language_abnormal(lang: str, allowed: set = {"zh", "en", "ja"}):
     """
     若語言異常則 log 警告。
     """
-    if lang not in allowed:
+    if _debug_mode and (lang not in allowed):
         logger.warning(f"⚠️ 語言偵測異常（{lang}），請檢查內容合理性")
 
 def format_segment_transcripts(transcripts: list[str], langs: list[str]) -> str:
@@ -522,7 +526,6 @@ def text_similarity(text1: str, text2: str) -> tuple[float, bool, str]:
     # 確保清理所有資源
     if gpu_manager.get_device().type == "cuda":
         gpu_manager.clear_gpu_memory()
-        logger.info("最終清理 GPU 記憶體完成")
 
     logger.info(f"文本相似度: 原始={sim:.4f}, 調整後={adj_sim:.4f}, 長度比例={len_ratio:.2f}")
     return adj_sim, True, f"length_ratio={len_ratio:.2f}"
