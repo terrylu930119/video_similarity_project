@@ -18,10 +18,21 @@ _cleanup_in_progress = False
 
 # =============== 類別定義：影片處理器 ===============
 class VideoProcessor:
-    def __init__(self, output_dir: str, time_interval: float):
+    def __init__(self, output_dir: str, time_interval):
         self.output_dir = output_dir
-        self.time_interval = time_interval
+        self.time_interval = time_interval  # 可以是 float 或 'auto'
         self.processed = {}
+
+    def _decide_interval(self, duration: float) -> float:
+        """根據影片長度自動決定抽幀時間間隔"""
+        if duration <= 120:
+            return 0.5  # 每 0.5 秒一幀
+        elif duration <= 600:
+            return 1.0  # 每秒一幀
+        elif duration <= 1200:
+            return 2.0  # 每 2 秒一幀
+        else:
+            return 3.0  # 每 3 秒一幀
 
     def download_and_process(self, link: str) -> dict:
         if link in self.processed:
@@ -51,7 +62,10 @@ class VideoProcessor:
 
         frames_dir = os.path.join(self.output_dir, "frames", os.path.basename(video_path).split('.')[0])
         os.makedirs(frames_dir, exist_ok=True)
-        frames = extract_frames(video_path, frames_dir, self.time_interval)
+
+        interval = self._decide_interval(duration) if self.time_interval == "auto" else float(self.time_interval)
+        logger.info(f"使用幀間隔：{interval:.2f} 秒")
+        frames = extract_frames(video_path, frames_dir, interval)
 
         valid_frames = [os.path.abspath(f) for f in frames if os.path.exists(f)]
         if not valid_frames:
@@ -98,16 +112,16 @@ def main():
     parser.add_argument("--ref", required=True, help="參考影片連結")
     parser.add_argument("--comp", nargs='+', required=True, help="比對影片連結")
     parser.add_argument("--output", default="downloads", help="輸出資料夾")
-    parser.add_argument("--cache", default="feature_cache", help="快取資料夾")  
-    parser.add_argument("--interval", type=float, default=2.0, help="幀提取時間間隔")
+    parser.add_argument("--cache", default="feature_cache", help="快取資料夾")
+    parser.add_argument("--interval", default="auto", help="幀提取時間間隔（秒），可設為 auto 表示自動決定")
     parser.add_argument("--keep", action="store_true", help="是否保留中間檔案")
-    
+
     if len(sys.argv) == 1:
         # 預設測試參數（無 CLI 時）
         args = parser.parse_args([
-            '--ref', '',
-            '--comp', '',
-            '--interval', '2.0',
+            '--ref', 'https://www.youtube.com/watch?v=_ct0H1cSvnY',
+            '--comp', 'https://www.bilibili.com/video/BV1APNWziErE/?spm_id_from=333.1387.upload.video_card.click&vd_source=6652d02982a20ea968442207129231f8',
+            '--interval', 'auto',
             '--output', 'downloads',
             '--cache', 'feature_cache',
             '--keep'
@@ -144,7 +158,7 @@ def main():
             except Exception as e:
                 logger.error(f"比對失敗 {link}: {str(e)}")
 
-        with ThreadPoolExecutor() as executor:   #max_workers=6
+        with ThreadPoolExecutor() as executor:
             executor.map(process_and_compare, args.comp)
 
         display_similarity_results(args.ref, comparison_results)
