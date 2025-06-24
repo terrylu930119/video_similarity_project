@@ -12,7 +12,7 @@ from hashlib import sha1
 from filelock import FileLock
 from functools import lru_cache
 from utils.logger import logger
-from librosa.sequence import dtw
+from collections import OrderedDict
 from sklearn.decomposition import PCA
 from utils.gpu_utils import gpu_manager
 from librosa.feature.rhythm import tempo
@@ -49,7 +49,6 @@ SIMILARITY_WEIGHTS = {
 
 THREAD_CONFIG = {'max_workers': 6}
 CROP_CONFIG = {'min_duration': 30.0, 'max_duration': 300.0, 'overlap': 0.5, 'silence_threshold': -14}
-_pca_registry = {}
 
 # =============== 初始化模型與資源 ===============
 FEATURE_CACHE_DIR = os.path.join(os.getcwd(), "feature_cache")
@@ -60,6 +59,8 @@ device = gpu_manager.get_device()
 
 pann_model: Optional[torch.nn.Module] = None
 openl3_model: Optional[torch.nn.Module] = None
+
+_pca_registry = {}
 
 @lru_cache(maxsize=3)
 def get_mel_transform(sr: int):
@@ -105,6 +106,26 @@ def get_optimal_chunk_size(file_size: int) -> float:
         return 60.0  # 較大的分塊
 
 # =============== 基本工具函數 ===============
+class PCACache:
+    def __init__(self, max_items=15):
+        self.cache = OrderedDict()
+        self.max_items = max_items
+
+    def get(self, name):
+        return self.cache.get(name)
+
+    def set(self, name, pca):
+        self.cache[name] = pca
+        self.cache.move_to_end(name)
+        if len(self.cache) > self.max_items:
+            evicted = self.cache.popitem(last=False)
+            logger.info(f"自動清除 PCA: {evicted[0]}")
+
+    def clear(self):
+        self.cache.clear()
+
+_pca_registry = PCACache()
+
 def log_memory(stage: str):
     print(f"[{stage}] Memory: {psutil.Process(os.getpid()).memory_info().rss / 1024**2:.2f} MB")
 
@@ -230,25 +251,23 @@ def perceptual_score(sim_score: float) -> float:
     return min(max(sim_score ** gamma, 0.0), 1.0)
 
 def fit_pca_if_needed(name: str, data: np.ndarray, n_components: int):
-    """若尚未訓練 PCA，則訓練並儲存"""
-    if name in _pca_registry:
-        return _pca_registry[name]
+    if _pca_registry.get(name):
+        return _pca_registry.get(name)
     n_samples, dim = data.shape
     n_components = min(n_components, n_samples, dim)
     if n_components < 2:
-        return None  # 資料過少無法降維
+        return None
     pca = PCA(n_components=n_components)
     pca.fit(data)
-    _pca_registry[name] = pca
+    _pca_registry.set(name, pca)
     return pca
 
 def apply_pca(name: str, vector: np.ndarray, n_components: int) -> np.ndarray:
-    """對單一向量或矩陣應用已訓練 PCA，若無則忽略"""
     if vector.ndim == 1:
         vector = vector.reshape(1, -1)
-    if name not in _pca_registry:
+    pca = _pca_registry.get(name)
+    if pca is None:
         return vector.squeeze()
-    pca = _pca_registry[name]
     reduced = pca.transform(vector)
     return reduced.squeeze()
 
@@ -542,20 +561,31 @@ def compute_similarity(f1: dict, f2: dict) -> float:
         try:
             if k == 'pann_features' and isinstance(v1, np.ndarray) and v1.size == v2.size:
                 split = 2048
-                emb1, tag1 = v1[:split], np.round(v1[split:])
-                emb2, tag2 = v2[:split], np.round(v2[split:])
+                emb1, tag1 = v1[:split], v1[split:]
+                emb2, tag2 = v2[:split], v2[split:]
 
-                # 加入降維訓練與應用
-                fit_pca_if_needed('pann_emb', np.stack([emb1, emb2]), n_components=128)
-                emb1_pca = apply_pca('pann_emb', emb1, n_components=128)
-                emb2_pca = apply_pca('pann_emb', emb2, n_components=128)
+                # 判斷是否完全一致，避免 PCA 發生 NaN
+                if np.allclose(emb1, emb2, atol=1e-5):
+                    logger.info("✅ pann 嵌入向量完全一致，跳過 PCA")
+                    sim1 = 1.0
+                else:
+                    try:
+                        fit_pca_if_needed('pann_emb', np.stack([emb1, emb2]), n_components=128)
+                        emb1_pca = apply_pca('pann_emb', emb1, n_components=128)
+                        emb2_pca = apply_pca('pann_emb', emb2, n_components=128)
+                        # 若出現 NaN，轉成 0
+                        emb1_pca = np.nan_to_num(emb1_pca)
+                        emb2_pca = np.nan_to_num(emb2_pca)
+                        sim1 = cos_sim(emb1_pca, emb2_pca)
+                    except Exception as e:
+                        logger.warning(f"⚠️ pann PCA 比對失敗，改用原始向量: {e}")
+                        sim1 = cos_sim(emb1, emb2)
 
-                sim1 = cos_sim(emb1_pca, emb2_pca)
-
-                # tag 做 Jaccard
-                top1 = set(tag1.argsort()[-5:])
-                top2 = set(tag2.argsort()[-5:])
+                # top-5 類別比對
+                top1 = set(np.argsort(tag1)[-5:])
+                top2 = set(np.argsort(tag2)[-5:])
                 jaccard = len(top1 & top2) / len(top1 | top2) if top1 | top2 else 0.0
+
                 sim = 0.7 * sim1 + 0.3 * jaccard
 
             elif k == 'openl3_features' and isinstance(v1, dict) and isinstance(v2, dict):
