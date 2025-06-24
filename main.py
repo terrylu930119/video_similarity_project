@@ -119,8 +119,8 @@ def main():
     if len(sys.argv) == 1:
         # 預設測試參數（無 CLI 時）
         args = parser.parse_args([
-            '--ref', 'https://www.youtube.com/watch?v=_ct0H1cSvnY',
-            '--comp', 'https://www.bilibili.com/video/BV1APNWziErE/?spm_id_from=333.1387.upload.video_card.click&vd_source=6652d02982a20ea968442207129231f8',
+            '--ref', '',
+            '--comp', '',
             '--interval', 'auto',
             '--output', 'downloads',
             '--cache', 'feature_cache',
