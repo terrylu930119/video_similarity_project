@@ -186,7 +186,7 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
         logger.error(f"音訊不存在: {audio_path}")
         return []
 
-    temp_dir = os.path.join(os.path.dirname(audio_path), "temp_segments")
+    temp_dir = os.path.join(os.path.dirname(audio_path), f"temp_segments_{os.path.splitext(os.path.basename(audio_path))[0]}")
     os.makedirs(temp_dir, exist_ok=True)
 
     try:
