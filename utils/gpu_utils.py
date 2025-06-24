@@ -14,7 +14,10 @@ class GPUManager:
         return cls._instance
     
     def __init__(self):
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            self.device = torch.device("cuda:0")
+        else:
+            self.device = torch.device("cpu")
         self.initialized = False
         
     def initialize(self):
@@ -23,10 +26,10 @@ class GPUManager:
             
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            torch.cuda.set_device(self.device)
-            logger.info(f"使用 GPU: {torch.cuda.get_device_name(0)}")
-            logger.info(f"當前 GPU 內存使用量: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
-            logger.info(f"當前 GPU 緩存使用量: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
+            torch.cuda.set_device(self.device.index)
+            logger.info(f"使用 GPU: {torch.cuda.get_device_name(self.device.index)}")
+            logger.info(f"當前 GPU 內存使用量: {torch.cuda.memory_allocated(self.device.index) / 1024**2:.2f} MB")
+            logger.info(f"當前 GPU 緩存使用量: {torch.cuda.memory_reserved(self.device.index) / 1024**2:.2f} MB")
         else:
             logger.warning("未檢測到可用的 GPU，將使用 CPU 進行處理")
             
@@ -42,8 +45,8 @@ class GPUManager:
             
     def log_gpu_memory(self):
         if torch.cuda.is_available():
-            logger.info(f"當前 GPU 內存使用量: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MB")
-            logger.info(f"當前 GPU 緩存使用量: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MB")
+            logger.info(f"當前 GPU 內存使用量: {torch.cuda.memory_allocated(self.device.index) / 1024**2:.2f} MB")
+            logger.info(f"當前 GPU 緩存使用量: {torch.cuda.memory_reserved(self.device.index) / 1024**2:.2f} MB")
 
 # 建立全域 GPU 管理器實例
 gpu_manager = GPUManager()

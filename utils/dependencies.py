@@ -75,7 +75,7 @@ def check_gpu_dependencies():
         return False
 
 if __name__ == "__main__":
-    install_requirements()
+    #install_requirements()
     check_ffmpeg()
     check_yt_dlp()
     check_gpu_dependencies()

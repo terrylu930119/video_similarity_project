@@ -1,5 +1,4 @@
 import os
-import sys
 import gc
 import time
 import torch
@@ -10,16 +9,15 @@ import torchaudio
 import torchopenl3
 import numpy as np
 from hashlib import sha1
-from pydub import AudioSegment
+from filelock import FileLock
 from functools import lru_cache
 from utils.logger import logger
 from librosa.sequence import dtw
 from sklearn.decomposition import PCA
+from utils.gpu_utils import gpu_manager
 from librosa.feature.rhythm import tempo
-from pydub.silence import detect_nonsilent
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Generator, Tuple, Dict
-from sklearn.metrics.pairwise import cosine_similarity
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # =============== 全局配置参数 ===============
 AUDIO_CONFIG = {
@@ -55,9 +53,12 @@ CROP_CONFIG = {'min_duration': 30.0, 'max_duration': 300.0, 'overlap': 0.5, 'sil
 # =============== 初始化模型與資源 ===============
 FEATURE_CACHE_DIR = os.path.join(os.getcwd(), "feature_cache")
 os.makedirs(FEATURE_CACHE_DIR, exist_ok=True)
-device = torch.device('cuda' if torch.cuda.is_available() and AUDIO_CONFIG['force_gpu'] else 'cpu')
-pann_model = None
-openl3_model = None
+
+gpu_manager.initialize()
+device = gpu_manager.get_device()
+
+pann_model: Optional[torch.nn.Module] = None
+openl3_model: Optional[torch.nn.Module] = None
 
 @lru_cache(maxsize=3)
 def get_mel_transform(sr: int):
@@ -197,12 +198,17 @@ def get_cache_path(audio_path: str) -> str:
     return os.path.join(FEATURE_CACHE_DIR, f"{basename}_{hash_id[:10]}.npz")
 
 def save_audio_features_to_cache(audio_path: str, features: Dict[str, any]):
-    try:
-        cache_path = get_cache_path(audio_path)
-        np.savez_compressed(cache_path, **features)
-        logger.info(f"✅ 特徵快取儲存成功: {cache_path}")
-    except Exception as e:
-        logger.warning(f"⚠️ 儲存特徵快取失敗: {e}")
+    cache_path = get_cache_path(audio_path)
+    lock_path = cache_path + ".lock"
+    with FileLock(lock_path):
+        if os.path.exists(cache_path):
+            logger.info(f"⚠️ 快取已存在，跳過儲存: {cache_path}")
+            return
+        try:
+            np.savez_compressed(cache_path, **features)
+            logger.info(f"✅ 特徵快取儲存成功: {cache_path}")
+        except Exception as e:
+            logger.warning(f"⚠️ 儲存特徵快取失敗: {e}")
 
 def load_audio_features_from_cache(audio_path: str) -> Optional[Dict[str, any]]:
     try:
@@ -330,6 +336,7 @@ def extract_openl3_features(audio_path: str, chunk_sec=10.0) -> Optional[dict]:
             logger.warning(f"❌ OpenL3 全部段落提取失敗：{audio_path}")
             return None
         emb_array = np.stack(emb_list)
+        gpu_manager.clear_gpu_memory()
         return {
             "merged": np.concatenate([
                 np.mean(emb_array, axis=0),

@@ -2,11 +2,10 @@ import os
 import torch
 import torchaudio
 import numpy as np
-import torchaudio.transforms as T
+import torchaudio.transforms as transform
 from pydub import AudioSegment, silence
 
 # =============== 靜音修剪工具 ===============
-
 def trim_silence_pydub(waveform: torch.Tensor, sr: int, min_silence_len=300, silence_thresh_db=-40) -> torch.Tensor:
     """
     使用 pydub 根據靜音切割音訊並合併語音段，避免語句開頭/結尾被剪掉。
@@ -34,7 +33,6 @@ def trim_silence_pydub(waveform: torch.Tensor, sr: int, min_silence_len=300, sil
     return torch.tensor(cleaned).unsqueeze(0)
 
 # =============== 音訊清理流程 ===============
-
 def load_and_clean_audio(audio_path: str, output_path: str = None, sample_rate: int = 16000,
                          use_silence_detection: bool = False, min_silence_len: int = 300, silence_thresh_db: int = -40) -> str:
     """
@@ -47,7 +45,7 @@ def load_and_clean_audio(audio_path: str, output_path: str = None, sample_rate: 
             waveform = waveform.mean(dim=0, keepdim=True)
 
         if sr != sample_rate:
-            resampler = T.Resample(sr, sample_rate)
+            resampler = transform.Resample(sr, sample_rate)
             waveform = resampler(waveform)
             sr = sample_rate
 

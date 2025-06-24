@@ -1,4 +1,3 @@
-# =============== 引入所需模組 ===============
 import os
 import sys
 import torch
@@ -6,9 +5,7 @@ import signal
 import shutil
 import traceback
 import argparse
-
 from utils.logger import logger
-from utils.gpu_utils import gpu_manager
 from utils.downloader import download_video
 from core.audio_processor import extract_audio
 from core.text_processor import transcribe_audio
@@ -108,9 +105,8 @@ def main():
     if len(sys.argv) == 1:
         # 預設測試參數（無 CLI 時）
         args = parser.parse_args([
-            '--ref', 'https://www.youtube.com/watch?v=AK4TQ8fbVBk',
-            '--comp', 'https://www.bilibili.com/video/BV14CMWzSE9b/',
-                   'https://www.bilibili.com/video/BV1ypTZzME7T/',
+            '--ref', '',
+            '--comp', '',
             '--interval', '2.0',
             '--output', 'downloads',
             '--cache', 'feature_cache',
@@ -148,7 +144,7 @@ def main():
             except Exception as e:
                 logger.error(f"比對失敗 {link}: {str(e)}")
 
-        with ThreadPoolExecutor() as executor:
+        with ThreadPoolExecutor() as executor:   #max_workers=6
             executor.map(process_and_compare, args.comp)
 
         display_similarity_results(args.ref, comparison_results)

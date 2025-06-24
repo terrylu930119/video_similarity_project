@@ -1,32 +1,23 @@
-# ======================== 📦 模組與依賴 ========================
 import cv2
 import time
 import torch
 import numpy as np
 from PIL import Image
 from functools import lru_cache
+from utils.logger import logger
+from utils.gpu_utils import gpu_manager
 import torchvision.transforms as transforms
 from typing import List, Dict, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 from torchvision.models import mobilenet_v3_large, MobileNet_V3_Large_Weights
 
-from utils.logger import logger
-from utils.gpu_utils import gpu_manager
+# ======================== 全域變數 ========================
+_image_model: Optional[torch.nn.Module] = None
+_transform: Optional[transforms.Compose] = None
+_model_loaded: bool = False
+_feature_cache: dict[str, np.ndarray] = {}
 
-# ======================== ⚙️ 全域變數 ========================
-_image_model = None
-_transform = None
-_model_loaded = False
-_feature_cache = {}
-
-# ======================== 🧹 資源管理 ========================
-def cleanup():
-    """清理 GPU 資源"""
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        gpu_manager.clear_gpu_memory()
-
-# =============== 🧠 特徵擷取：感知哈希（pHash） ===============
+# =============== 特徵擷取：感知哈希（pHash） ===============
 @lru_cache(maxsize=1024)
 def compute_phash(image_path: str) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """計算灰度、邊緣與顏色三種特徵的感知哈希"""
@@ -45,24 +36,26 @@ def compute_phash(image_path: str) -> Optional[Tuple[np.ndarray, np.ndarray, np.
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         hsv = cv2.resize(hsv, (64, 64))
 
-        if torch.cuda.is_available():
-            gray_tensor = torch.from_numpy(gray).float().cuda()
-            edge_tensor = torch.from_numpy(edges).float().cuda()
-            hsv_tensor = torch.from_numpy(hsv[:, :, :2]).float().cuda()
+        if gpu_manager.get_device().type == "cuda":
+            #  ──────────────── GPU 快速 DCT／閾值二值化  ────────────────
+            gray_tensor = torch.from_numpy(gray).float().to(gpu_manager.get_device())
+            edge_tensor = torch.from_numpy(edges).float().to(gpu_manager.get_device())
+            hsv_tensor = torch.from_numpy(hsv[:, :, :2]).float().to(gpu_manager.get_device())
 
             gray_dct = torch.fft.rfft2(gray_tensor)
             gray_dct_low = torch.abs(gray_dct[:32, :32])
             gray_threshold = torch.mean(gray_dct_low.cpu()) + 0.3 * torch.std(gray_dct_low.cpu())
-            gray_hash = (gray_dct_low > gray_threshold.cuda()).cpu().numpy()
+            gray_hash = (gray_dct_low > gray_threshold.to(gpu_manager.get_device())).cpu().numpy()
 
             edge_dct = torch.fft.rfft2(edge_tensor)
             edge_dct_low = torch.abs(edge_dct[:32, :32])
             edge_mean = torch.mean(edge_dct_low.cpu())
-            edge_hash = (edge_dct_low > edge_mean.cuda()).cpu().numpy()
+            edge_hash = (edge_dct_low > edge_mean.to(gpu_manager.get_device())).cpu().numpy()
 
             hsv_mean = torch.mean(hsv_tensor, dim=(0, 1))
             hsv_hash = (hsv_tensor > hsv_mean.reshape(1, 1, -1)).cpu().numpy()
         else:
+            #  ──────────────── CPU 模式  ────────────────
             gray_dct = cv2.dct(np.float32(gray))[:32, :32]
             gray_hash = gray_dct > np.mean(gray_dct) + 0.3 * np.std(gray_dct)
 
@@ -78,7 +71,7 @@ def compute_phash(image_path: str) -> Optional[Tuple[np.ndarray, np.ndarray, np.
         logger.error(f"計算多重特徵哈希時出錯 {image_path}: {str(e)}")
         return None
 
-# =============== 🧠 特徵擷取：深度模型（MobileNetV3） ===============
+# =============== 特徵擷取：深度模型（MobileNetV3） ===============
 def get_image_model():
     """載入 MobileNetV3-Large 模型與前處理流程"""
     global _image_model, _transform, _model_loaded
@@ -88,8 +81,9 @@ def get_image_model():
             logger.info("開始載入 MobileNetV3-Large 模型...")
             _image_model = mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.IMAGENET1K_V1)
             _image_model = torch.nn.Sequential(*list(_image_model.children())[:-1])
-            if torch.cuda.is_available():
-                _image_model = _image_model.cuda()
+            gpu_manager.initialize()
+            if gpu_manager.get_device().type == "cuda":
+                _image_model = _image_model.to(gpu_manager.get_device())
             _image_model.eval()
 
             _transform = transforms.Compose([
@@ -131,8 +125,7 @@ def compute_batch_embeddings(image_paths: List[str], batch_size: int = 64) -> Op
         if batch_tensors:
             for i in range(0, len(batch_tensors), batch_size):
                 batch = torch.stack(batch_tensors[i:i + batch_size])
-                if torch.cuda.is_available():
-                    batch = batch.cuda()
+                batch = batch.to(gpu_manager.get_device()) if gpu_manager.get_device().type == "cuda" else batch
                 with torch.no_grad():
                     features = model(batch).cpu()
                 for j, f in enumerate(features):
@@ -140,8 +133,7 @@ def compute_batch_embeddings(image_paths: List[str], batch_size: int = 64) -> Op
                     embeddings.append(vec)
                     _feature_cache[image_paths[i + j]] = vec
 
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                gpu_manager.clear_gpu_memory()
 
         return np.array(embeddings) if embeddings else None
 
@@ -149,7 +141,7 @@ def compute_batch_embeddings(image_paths: List[str], batch_size: int = 64) -> Op
         logger.error(f"批次計算嵌入向量時出錯: {str(e)}")
         return None
 
-# =============== 🧪 特徵比對邏輯 ===============
+# =============== 特徵比對邏輯 ===============
 def fast_similarity(feat1: Tuple[np.ndarray, np.ndarray, np.ndarray],
                     feat2: Tuple[np.ndarray, np.ndarray, np.ndarray]) -> float:
     """快速比對 pHash 特徵的綜合相似度"""
@@ -160,7 +152,7 @@ def fast_similarity(feat1: Tuple[np.ndarray, np.ndarray, np.ndarray],
         return gray_sim * 0.5 + edge_sim * 0.3 + hsv_sim * 0.2
     return 0
 
-# =============== 🎬 視頻相似度比對主流程 ===============
+# =============== 影片相似度比對主流程 ===============
 def video_similarity(frames1: List[str], frames2: List[str],
                      video_duration: float,
                      batch_size: int = 64) -> Dict[str, float]:
@@ -179,7 +171,7 @@ def video_similarity(frames1: List[str], frames2: List[str],
 
         logger.info(f"採樣幀數: 視頻1={len(sampled_frames1)}，視頻2={len(sampled_frames2)}")
 
-        # ====== 第一階段：pHash 快速比對 ======
+        #  ──────────────── 第一階段：pHash 快速比對 ────────────────
         with ThreadPoolExecutor() as executor:
             phash1 = list(executor.map(compute_phash, sampled_frames1))
             phash2 = list(executor.map(compute_phash, sampled_frames2))
@@ -216,7 +208,7 @@ def video_similarity(frames1: List[str], frames2: List[str],
                 "phash_threshold": phash_threshold
             }
 
-        # ====== 第二階段：深度特徵比對 ======
+        #  ──────────────── 第二階段：深度特徵比對  ────────────────
         e1 = compute_batch_embeddings([p[0] for p in similar_pairs], batch_size)
         e2 = compute_batch_embeddings([p[1] for p in similar_pairs], batch_size)
 

@@ -1,4 +1,3 @@
-# ======================== 📦 模組與依賴 ========================
 import os
 import torch
 import numpy as np
@@ -9,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from core.audio_processor import audio_similarity
 from core.image_processor import video_similarity
 
-# ======================== 📂 檔案驗證與前處理 ========================
+# ======================== 檔案驗證與前處理 ========================
 def check_files_exist(files: Union[str, List[str]], check_size: bool = True) -> bool:
     """
     檢查文件是否存在且有效
@@ -67,7 +66,7 @@ def get_video_id_from_path(file_path: str) -> str:
     else:  # 影片或音頻文件
         return os.path.splitext(basename)[0]
 
-# ======================== 🎯 相似度計算主流程 ========================
+# ======================== 相似度計算主流程 ========================
 def calculate_overall_similarity(audio1: str, audio2: str,
                                image1: Union[str, List[str]], image2: Union[str, List[str]],
                                text1: str, text2: str,
@@ -195,7 +194,7 @@ def calculate_overall_similarity(audio1: str, audio2: str,
         "text_status": reason
     }
 
-# ======================== 📊 結果輸出與顯示 ========================
+# ======================== 結果輸出與顯示 ========================
 def display_similarity_results(reference_link: str, comparison_results: List[Dict[str, Union[str, float]]]):
     """
     顯示相似度比對結果
@@ -207,9 +206,9 @@ def display_similarity_results(reference_link: str, comparison_results: List[Dic
     print("\n=== 相似度比對結果 ===")
     print(f"參考影片: {reference_link[:60] + '...' if len(reference_link) > 63 else reference_link}\n")
     print("比對結果:")
-    print("-" * 120)
+    print("-" * 122)
     print(f"{'影片連結':<62} {'音訊相似度':>8} {'畫面相似度':>8} {'內容相似度':>8} {'綜合相似度':>8}")
-    print("-" * 120)
+    print("-" * 122)
 
     for result in comparison_results:
         link_display = result['link'][:60] + '...' if len(result['link']) > 63 else result['link']
@@ -223,7 +222,7 @@ def display_similarity_results(reference_link: str, comparison_results: List[Dic
               f"{result['image_similarity']:>14.3f} "
               f"{text_sim_display} "
               f"{result['overall_similarity']:>14.3f}")
-    print("-" * 120)
+    print("-" * 122)
     # 添加註解說明
     if any(not r.get('text_meaningful', True) for r in comparison_results):
         print("\n註: * 表示該影片的文本內容被判定為無意義，其文本相似度權重已被重新分配到音訊和畫面相似度")
