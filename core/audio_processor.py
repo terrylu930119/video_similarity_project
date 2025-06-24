@@ -38,12 +38,12 @@ FEATURE_CONFIG = {
 SIMILARITY_WEIGHTS = {
     'dl_features': 1.5,       # 比對深度學習模型提取的高層特徵，包含音色、音質等複雜特徵
     'pann_features': 1.2,     # 比對音頻場景分類特徵，用於識別環境音和背景音
-    'openl3_features': 1.0,   # 比對音頻嵌入向量，捕捉音頻的語義信息
-    'openl3_chunkwise': 1.2,  # chunkwise DTW 結構相似度
-    'onset': 1.5,             # 比對音頻的起始點和節奏變化點
-    'mfcc': 2.2,              # 比對梅爾頻率倒譜係數，主要用於音色和音質比對
+    'openl3_features': 1.7,   # 比對音頻嵌入向量，捕捉音頻的語義信息
+    'openl3_chunkwise': 0.5,  # chunkwise DTW 結構相似度
+    'onset': 1.0,             # 比對音頻的起始點和節奏變化點
+    'mfcc': 1.5,              # 比對梅爾頻率倒譜係數，主要用於音色和音質比對
     'mfcc_delta': 1.5,        # 比對 MFCC 的動態變化，反映音頻的時變特性
-    'chroma': 1.8,            # 比對音高分布特徵，用於和聲和調性分析
+    'chroma': 1.5,            # 比對音高分布特徵，用於和聲和調性分析
     'tempo': 1.4              # 比對節奏速度特徵，反映音樂的節奏特性
 }
 
@@ -223,13 +223,9 @@ def load_audio_features_from_cache(audio_path: str) -> Optional[Dict[str, any]]:
         logger.warning(f"⚠️ 載入特徵快取失敗: {e}")
         return None
 
-def perceptual_score(sim_score: float, gamma: float = 2.0) -> float:
-    """
-    將相似度經過非線性壓縮，以提高分數差異的可感知程度。
-    sim_score: 原始加權相似度（0.0 ~ 1.0）
-    gamma: 指數控制強度，越大擴張效果越明顯
-    回傳：人類可感知的顯著差異化相似度（0.0 ~ 1.0）
-    """
+def perceptual_score(sim_score: float) -> float:
+    """高相似度 → gamma 趨近 1.2；低分拉大差異"""
+    gamma = 1.2 + 2.0 * (1 - sim_score)
     return min(max(sim_score ** gamma, 0.0), 1.0)
 
 # =============== 特徵擷取與比較 ===============
