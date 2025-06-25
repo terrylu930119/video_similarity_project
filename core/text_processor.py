@@ -3,6 +3,7 @@ import os
 import re
 import torch
 import librosa
+import threading 
 import torchaudio
 import numpy as np
 from math import ceil
@@ -17,22 +18,24 @@ from utils.audio_cleaner import load_and_clean_audio
 from sentence_transformers import SentenceTransformer, util
 
 # ======================== 全域模型 ========================
-_whisper_model: WhisperModel | None = None
+_whisper_model: WhisperModel | None = None      # ★ 單例
+_whisper_lock  = threading.Lock()              # ★ 簡單互斥
 _sentence_transformer: SentenceTransformer | None = None
-_debug_mode: bool = False  # 若為 True 會輸出額外除錯資訊
+_debug_mode: bool = False
 
 # ======================== 模型載入函式 ========================
 def get_whisper_model() -> WhisperModel:
-    """載入 (或回傳已載入的) Faster‑Whisper 模型。"""
+    """
+    全域只載入一次 WhisperModel。
+    回傳前 **不加鎖**，鎖留給呼叫端保護 transcribe 時段即可。
+    """
     global _whisper_model
-
     if _whisper_model is None:
         device = "cuda" if gpu_manager.get_device().type == "cuda" else "cpu"
-        compute_type = "float16" if device == "cuda" else "int8"
-        logger.info("正在載入 Faster‑Whisper medium 模型…")
+        compute_type = "int8_float16" if device == "cuda" else "int8"
+        logger.info("載入 Faster-Whisper medium 權重…")
         _whisper_model = WhisperModel("medium", device=device, compute_type=compute_type)
         logger.info("Whisper 模型載入完成！")
-
     return _whisper_model
 
 def get_sentence_transformer() -> SentenceTransformer:
@@ -238,7 +241,7 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
                     logger.error(f"片段 {i} 儲存失敗: {e}")
                     return None
 
-            with ThreadPoolExecutor(max_workers=min(os.cpu_count() - 1, 4)) as pool:
+            with ThreadPoolExecutor(max_workers=min(os.cpu_count() - 2, 4)) as pool:
                 segs = list(pool.map(lambda i: _save_segment_seg(i, y, sr), range(num_segments)))
             segment_paths.extend([p for p in segs if p])
 
@@ -320,7 +323,7 @@ def transcribe_audio(audio_path: str, video_url: str | None = None, output_dir: 
     if gpu_manager.get_device().type == "cuda":
         gpu_manager.clear_gpu_memory()
 
-    model = get_whisper_model()
+    get_whisper_model()
 
     # 前處理 (去雜訊 / 正規化…)
     clean_vocal_path = load_and_clean_audio(audio_path)
@@ -343,15 +346,18 @@ def transcribe_audio(audio_path: str, video_url: str | None = None, output_dir: 
 
     for idx, seg in enumerate(tqdm(segments, desc="轉錄進度"), 1):
         try:
-            seg_result, info = model.transcribe(
-                seg,
-                beam_size=5,
-                temperature=0.0,
-                vad_filter=False,
-                compression_ratio_threshold=5.0,
-                log_prob_threshold=-2.5,
-                no_speech_threshold=0.6,
-            )
+            # 同一時間只允許一條執行緒呼叫 GPU 推論
+            with _whisper_lock:
+                seg_result, info = get_whisper_model().transcribe(
+                    seg,
+                    beam_size=5,
+                    temperature=0.0,
+                    vad_filter=False,
+                    compression_ratio_threshold=5.0,
+                    log_prob_threshold=-2.5,
+                    no_speech_threshold=0.6,
+                )
+
             seg_text = "".join([s.text for s in seg_result]).strip()
             lang = info.language or "unknown"
 

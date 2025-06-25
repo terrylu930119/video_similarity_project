@@ -1,10 +1,10 @@
 import os
 import sys
-import torch
 import signal
 import shutil
-import traceback
 import argparse
+import traceback
+import multiprocessing
 from utils.logger import logger
 from utils.downloader import download_video
 from core.audio_processor import extract_audio
@@ -119,8 +119,19 @@ def main():
     if len(sys.argv) == 1:
         # 預設測試參數（無 CLI 時）
         args = parser.parse_args([
-            '--ref', '',
-            '--comp', '',
+            '--ref', 'https://www.youtube.com/watch?v=dxmmSFQxWzM&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO',
+            '--comp', 'https://www.youtube.com/watch?v=Bzl61esi4qc&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=2',
+            'https://www.youtube.com/watch?v=HagaJboujK4&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=3',
+            'https://www.youtube.com/watch?v=Z6cOxtDsfNU&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=4',
+            'https://www.youtube.com/watch?v=7D2uGv7aprQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=5',
+            'https://www.youtube.com/watch?v=jQraN1emvLQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=6',
+            'https://www.youtube.com/watch?v=RONGNWb7OpQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=7',
+            'https://www.youtube.com/watch?v=uh9jUhVTS28&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=8',
+            'https://www.youtube.com/watch?v=pGrI6hk0vBg&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=9',
+            'https://www.youtube.com/watch?v=m9cjOcCKIyQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=10',
+            'https://www.youtube.com/watch?v=Cfm8TWGkvYQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=11',
+            'https://www.youtube.com/watch?v=UtSEFdDZZLw&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=12',
+            'https://www.youtube.com/watch?v=3LLj3fTpRoM&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=13',
             '--interval', 'auto',
             '--output', 'downloads',
             '--cache', 'feature_cache',
@@ -131,8 +142,6 @@ def main():
 
     try:
         setup_signal_handlers()
-
-        logger.info("GPU 可用" if torch.cuda.is_available() else "使用 CPU")
         os.makedirs(os.path.join(args.output, "frames"), exist_ok=True)
         processor = VideoProcessor(args.output, args.interval)
 
@@ -158,7 +167,8 @@ def main():
             except Exception as e:
                 logger.error(f"比對失敗 {link}: {str(e)}")
 
-        with ThreadPoolExecutor() as executor:
+        max_workers = max(2, min(4, multiprocessing.cpu_count() - 2))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             executor.map(process_and_compare, args.comp)
 
         display_similarity_results(args.ref, comparison_results)

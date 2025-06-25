@@ -32,4 +32,4 @@ torchlibrosa>=0.0.9
 # 自然語言處理相關依賴
 huggingface-hub>=0.16.4
 sentence-transformers>=2.2.2
-faster-whisper>=0.9.0
+faster-whisper>=1.1.1
