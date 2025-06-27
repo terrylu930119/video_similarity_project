@@ -125,7 +125,7 @@ python main.py --ref "https://www.youtube.com/watch?v=xxxxxxxx" \
                --comp "https://www.youtube.com/watch?v=yyyyyyyy" "https://www.bilibili.com/video/BVXXXXX"
 ```
 
-### 結果解讀：
+## 結果解讀：
 比對完成後，終端輸出表格包含每個待比對影片相對於參考影片的相似度分數，例如：
 
 ```
@@ -142,7 +142,7 @@ https://www.bilibili.com/video/BVXXXXX...                    0.6578       0.7012
 
 註: * 表示該影片的文本內容被判定為無意義，其文本相似度權重已被重新分配到音訊和畫面相似度
 
-#### 相似度分數解讀指引（音頻 × 畫面 × 文本）
+### 相似度分數解讀指引（音頻 × 畫面 × 文本）
 
 本系統使用多模態比對方式，針對「音頻」、「畫面」、「轉錄文本」三個維度進行相似度評估。以下為各項分數的解讀說明，分數範圍皆為 0.0 ~ 1.0，分數越高代表內容越相似。
 
