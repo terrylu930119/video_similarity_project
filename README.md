@@ -127,7 +127,6 @@ python main.py --ref "https://www.youtube.com/watch?v=xxxxxxxx" \
 
 ### 結果解讀：
 比對完成後，終端輸出表格包含每個待比對影片相對於參考影片的相似度分數，例如：
-
 === 相似度比對結果 ===
 參考影片: https://youtu.be/abc123...
 
@@ -138,7 +137,6 @@ python main.py --ref "https://www.youtube.com/watch?v=xxxxxxxx" \
 https://youtu.be/def456...                                   0.8457       0.9123       0.0000*      0.8804
 https://www.bilibili.com/video/BVXXXXX...                    0.6578       0.7012       0.7345       0.6939
 ------------------------------------------------------------------------------------------------------------
-
 註: * 表示該影片的文本內容被判定為無意義，其文本相似度權重已被重新分配到音訊和畫面相似度
 
 
