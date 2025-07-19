@@ -4,28 +4,29 @@ import hashlib
 import yt_dlp
 import urllib.parse
 from utils.logger import logger
+from typing import Dict
 
 # =============== URL 檢查與命名工具 ===============
 def is_valid_url(url: str) -> bool:
     try:
         result = urllib.parse.urlparse(url)
         return all([result.scheme, result.netloc])
-    except:
+    except Exception:
         return False
 
 def generate_safe_filename(url: str) -> str:
-    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
+    url_hash: str = hashlib.md5(url.encode('utf-8')).hexdigest()
     parsed_url = urllib.parse.urlparse(url)
-    path_parts = [p for p in parsed_url.path.strip('/').split('/') if p]
+    path_parts: list[str] = [p for p in parsed_url.path.strip('/').split('/') if p]
 
-    meaningful_part = ""
+    meaningful_part: str = ""
     for part in reversed(path_parts):
         if not part.isdigit() and re.search(r'[a-zA-Z]', part):
             meaningful_part = part
             break
 
     if meaningful_part:
-        safe_part = re.sub(r'[^\w\-]', '_', meaningful_part)
+        safe_part: str = re.sub(r'[^\w\-]', '_', meaningful_part)
         return f"{safe_part}_{url_hash}"
     else:
         return url_hash
@@ -35,7 +36,7 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
     if not is_valid_url(url):
         raise ValueError(f"無效的 URL: {url}")
 
-    safe_filename = generate_safe_filename(url)
+    safe_filename: str = generate_safe_filename(url)
 
     try:
         os.makedirs(output_dir, exist_ok=True)
@@ -45,7 +46,7 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
         logger.error(f"建立或檢查輸出目錄時出錯: {str(e)}")
         raise
 
-    output_path = os.path.join(output_dir, f"{safe_filename}.mp4")
+    output_path: str = os.path.join(output_dir, f"{safe_filename}.mp4")
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
         logger.info(f"影片已存在且大小正常 ({os.path.getsize(output_path)} bytes): {output_path}")
         return output_path
@@ -53,7 +54,7 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
         logger.warning(f"發現空檔案，將重新下載: {output_path}")
         os.remove(output_path)
 
-    ydl_opts = {
+    ydl_opts: Dict[str, object] = {
         'format': f'bestvideo[height<={resolution[:-1]}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={resolution[:-1]}]+bestaudio/best[height<={resolution[:-1]}]/best',
         'outtmpl': output_path,
         'quiet': False,

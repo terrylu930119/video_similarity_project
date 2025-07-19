@@ -3,18 +3,17 @@ import cv2
 import torch
 import subprocess
 import numpy as np
-from typing import List, Tuple
 from utils.logger import logger
+from typing import List, Tuple, Union
 
 # =============== 基礎工具：影片檔案檢查 ===============
-
 def check_video_file(video_path: str) -> bool:
     """檢查影片檔案是否存在且可以打開"""
     if not os.path.exists(video_path):
         logger.error(f"影片檔案不存在: {video_path}")
         return False
 
-    cap = cv2.VideoCapture(video_path)
+    cap: cv2.VideoCapture = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         logger.error(f"無法打開影片檔案: {video_path}")
         return False
@@ -23,8 +22,7 @@ def check_video_file(video_path: str) -> bool:
     return True
 
 # =============== 幀儲存與處理 ===============
-
-def save_frame(frame_data: tuple) -> str:
+def save_frame(frame_data: Tuple[np.ndarray, str]) -> str:
     """
     保存單個幀
 
@@ -36,40 +34,39 @@ def save_frame(frame_data: tuple) -> str:
     """
     frame, frame_path = frame_data
     try:
-        success = cv2.imwrite(frame_path, frame)
+        success: bool = cv2.imwrite(frame_path, frame)
         return frame_path if success else ""
     except Exception as e:
         logger.error(f"保存幀時出錯 {frame_path}: {str(e)}")
         return ""
 
 # =============== 幀提取（含快取與 GPU 支援） ===============
-
 def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0) -> List[str]:
     try:
         if not check_video_file(video_path):
             return []
 
-        video_basename = os.path.basename(video_path)
-        video_id = os.path.splitext(video_basename)[0]
-        frames_dir = os.path.join(output_dir, video_id)
+        video_basename: str = os.path.basename(video_path)
+        video_id: str = os.path.splitext(video_basename)[0]
+        frames_dir: str = os.path.join(output_dir, video_id)
         os.makedirs(frames_dir, exist_ok=True)
 
-        existing_frames = sorted([
+        existing_frames: List[str] = sorted([
             os.path.join(frames_dir, f)
             for f in os.listdir(frames_dir)
             if f.startswith(f'{video_id}_frame_') and f.endswith('.jpg')
         ])
 
         if existing_frames:
-            valid_frames = [f for f in existing_frames if os.path.exists(f) and os.path.getsize(f) > 0]
+            valid_frames: List[str] = [f for f in existing_frames if os.path.exists(f) and os.path.getsize(f) > 0]
             if valid_frames:
                 logger.info(f"使用現有的 {len(valid_frames)} 個幀文件")
                 return valid_frames
             else:
                 logger.warning("現有的幀文件無效，將重新提取")
 
-        output_pattern = os.path.join(frames_dir, f'{video_id}_frame_%04d.jpg')
-        cmd = [
+        output_pattern: str = os.path.join(frames_dir, f'{video_id}_frame_%04d.jpg')
+        cmd: List[str] = [
             'ffmpeg', '-i', video_path,
             '-vf', f'fps=1/{time_interval}',
             '-frame_pts', '1',
@@ -79,7 +76,7 @@ def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0)
 
         if torch.cuda.is_available():
             try:
-                gpu_cmd = cmd.copy()
+                gpu_cmd: List[str] = cmd.copy()
                 gpu_cmd.insert(1, '-hwaccel')
                 gpu_cmd.insert(2, 'cuda')
                 gpu_cmd.append(output_pattern)
@@ -95,7 +92,7 @@ def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0)
             cmd.append(output_pattern)
             subprocess.run(cmd, check=True, capture_output=True, text=True)
 
-        frames = sorted([
+        frames: List[str] = sorted([
             os.path.join(frames_dir, f)
             for f in os.listdir(frames_dir)
             if f.startswith(f'{video_id}_frame_') and f.endswith('.jpg')
@@ -116,66 +113,64 @@ def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0)
     except Exception as e:
         logger.error(f"提取幀時出錯: {str(e)}")
         return []
-
+    
 # =============== 影片基本資訊擷取 ===============
-
 def get_video_info(video_path: str) -> Tuple[int, int, int, float]:
     if not check_video_file(video_path):
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0.0
 
-    cap = cv2.VideoCapture(video_path)
+    cap: cv2.VideoCapture = cv2.VideoCapture(video_path)
     try:
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames: int = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width: int = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height: int = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps: float = cap.get(cv2.CAP_PROP_FPS)
 
         logger.info(f"影片資訊: 總幀數={total_frames}, 寬度={width}, 高度={height}, FPS={fps}")
         return total_frames, width, height, fps
     except Exception as e:
         logger.error(f"取得影片資訊時發生錯誤: {str(e)}")
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0.0
     finally:
         cap.release()
 
 # =============== 幀尺寸調整 ===============
-
 def resize_frame(frame: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
     return cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
 
 # =============== 幀預處理（灰階 + 模糊） ===============
-
 def preprocess_frame(frame: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    gray: np.ndarray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred: np.ndarray = cv2.GaussianBlur(gray, (5, 5), 0)
     return blurred
 
 # =============== 關鍵幀擷取邏輯 ===============
-
 def extract_keyframes(video_path: str, output_dir: str, threshold: float = 30.0) -> List[str]:
     if not check_video_file(video_path):
         return []
 
     os.makedirs(output_dir, exist_ok=True)
-    cap = cv2.VideoCapture(video_path)
-    keyframe_paths = []
-    prev_frame = None
-    frame_id = 0
+    cap: cv2.VideoCapture = cv2.VideoCapture(video_path)
+    keyframe_paths: List[str] = []
+    prev_frame: Union[np.ndarray, None] = None
+    frame_id: int = 0
 
     try:
         while True:
+            ret: bool
+            frame: np.ndarray
             ret, frame = cap.read()
             if not ret:
                 break
 
-            processed_frame = preprocess_frame(frame)
+            processed_frame: np.ndarray = preprocess_frame(frame)
 
             if prev_frame is not None:
-                diff = cv2.absdiff(processed_frame, prev_frame)
-                mean_diff = np.mean(diff)
+                diff: np.ndarray = cv2.absdiff(processed_frame, prev_frame)
+                mean_diff: float = np.mean(diff)
 
                 if mean_diff > threshold:
-                    frame_path = os.path.join(output_dir, f"keyframe_{frame_id:04d}.jpg")
+                    frame_path: str = os.path.join(output_dir, f"keyframe_{frame_id:04d}.jpg")
                     cv2.imwrite(frame_path, frame)
                     keyframe_paths.append(frame_path)
                     frame_id += 1

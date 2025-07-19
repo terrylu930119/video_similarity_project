@@ -17,7 +17,7 @@ from sklearn.decomposition import PCA
 from utils.gpu_utils import gpu_manager
 from librosa.feature.rhythm import tempo
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Generator, Tuple, Dict
+from typing import Optional, Generator, Tuple, Dict, Any, List
 
 # =============== 全局配置参数 ===============
 AUDIO_CONFIG = {
@@ -107,26 +107,26 @@ def get_optimal_chunk_size(file_size: int) -> float:
 
 # =============== 基本工具函數 ===============
 class PCACache:
-    def __init__(self, max_items=15):
-        self.cache = OrderedDict()
+    def __init__(self, max_items: int = 15) -> None:
+        self.cache: OrderedDict[str, PCA] = OrderedDict()
         self.max_items = max_items
 
-    def get(self, name):
+    def get(self, name: str) -> Optional[PCA]:
         return self.cache.get(name)
 
-    def set(self, name, pca):
+    def set(self, name: str, pca: PCA) -> None:
         self.cache[name] = pca
         self.cache.move_to_end(name)
         if len(self.cache) > self.max_items:
             evicted = self.cache.popitem(last=False)
             logger.info(f"自動清除 PCA: {evicted[0]}")
 
-    def clear(self):
+    def clear(self) -> None:
         self.cache.clear()
 
 _pca_registry = PCACache()
 
-def log_memory(stage: str):
+def log_memory(stage: str)-> None:
     print(f"[{stage}] Memory: {psutil.Process(os.getpid()).memory_info().rss / 1024**2:.2f} MB")
 
 def normalize_waveform(waveform: torch.Tensor) -> torch.Tensor:
@@ -157,7 +157,7 @@ def load_audio(audio_path: str) -> Generator[Tuple[np.ndarray, int], None, None]
         logger.error(f"載入音頻文件失敗 {audio_path}: {str(e)}")
         return None
     
-def is_valid_vector(v):
+def is_valid_vector(v: Any) -> bool:
     """檢查是否為合法的向量（非空、非物件型態、一維）"""
     return isinstance(v, np.ndarray) and v.dtype != object and v.size > 0 and v.ndim == 1
 
@@ -219,7 +219,7 @@ def get_cache_path(audio_path: str) -> str:
     hash_id = sha1(audio_path.encode('utf-8')).hexdigest()
     return os.path.join(FEATURE_CACHE_DIR, f"{basename}_{hash_id[:10]}.npz")
 
-def save_audio_features_to_cache(audio_path: str, features: Dict[str, any]):
+def save_audio_features_to_cache(audio_path: str, features: Dict[str, any]) -> None:
     cache_path = get_cache_path(audio_path)
     lock_path = cache_path + ".lock"
     with FileLock(lock_path):
@@ -250,7 +250,7 @@ def perceptual_score(sim_score: float) -> float:
     gamma = 1.2 + 1.0 * (1 - sim_score)
     return min(max(sim_score ** gamma, 0.0), 1.0)
 
-def fit_pca_if_needed(name: str, data: np.ndarray, n_components: int):
+def fit_pca_if_needed(name: str, data: np.ndarray, n_components: int) -> Optional[PCA]:
     if _pca_registry.get(name):
         return _pca_registry.get(name)
     n_samples, dim = data.shape
@@ -283,7 +283,7 @@ def dtw_sim(a: np.ndarray, b: np.ndarray, max_length: int = 500) -> float:
     return 1 / (1 + cost[-1, -1] / len(a))
 
 # =============== 特徵擷取與比較 ===============
-def extract_dl_features(audio_path: str, chunk_sec=10.0) -> Optional[np.ndarray]:
+def extract_dl_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[np.ndarray]:
     try:
         y, sr = librosa.load(audio_path, sr=AUDIO_CONFIG['sample_rate'])
         mel_spec_transform = get_mel_transform(sr)
@@ -312,7 +312,7 @@ def extract_dl_features(audio_path: str, chunk_sec=10.0) -> Optional[np.ndarray]
         print(f"DL feature error: {e}")
         return None
 
-def extract_pann_features(audio_path: str, chunk_sec=10.0) -> Optional[np.ndarray]:
+def extract_pann_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[np.ndarray]:
     try:
         waveform, sr = torchaudio.load(audio_path)
         if sr != AUDIO_CONFIG['sample_rate']:
@@ -339,7 +339,7 @@ def extract_pann_features(audio_path: str, chunk_sec=10.0) -> Optional[np.ndarra
         print(f"PANN error: {e}")
         return None
 
-def extract_openl3_features(audio_path: str, chunk_sec=10.0) -> Optional[dict]:
+def extract_openl3_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[Dict[str, np.ndarray]]:
     try:
         audio, sr = librosa.load(audio_path, sr=None, mono=False)
         if audio.ndim == 1:
@@ -398,7 +398,7 @@ def extract_openl3_features(audio_path: str, chunk_sec=10.0) -> Optional[dict]:
         logger.warning(f"OpenL3 error: {e}")
         return None
 
-def extract_statistical_features(audio_path: str, chunk_sec=10.0) -> Optional[dict]:
+def extract_statistical_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[Dict[str, Any]]:
     try:
         y, sr = librosa.load(audio_path, sr=AUDIO_CONFIG['sample_rate'])
         chunk_size = int(chunk_sec * sr)
@@ -442,7 +442,7 @@ def extract_statistical_features(audio_path: str, chunk_sec=10.0) -> Optional[di
         print(f"Stat feature error: {e}")
         return None
 
-def combine_features(features: list) -> dict:
+def combine_features(features: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not features: return None
     combined = {}
     for key in features[0]:
@@ -463,7 +463,7 @@ def combine_features(features: list) -> dict:
             }
     return combined
 
-def chunkwise_dtw_sim(chunk1: np.ndarray, chunk2: np.ndarray, n_components=32) -> float:
+def chunkwise_dtw_sim(chunk1: np.ndarray, chunk2: np.ndarray, n_components: int = 32) -> float:
     if chunk1.shape[0] < 2 or chunk2.shape[0] < 2:
         return 0.0
     combined = np.vstack([chunk1, chunk2])
@@ -477,7 +477,7 @@ def chunkwise_dtw_sim(chunk1: np.ndarray, chunk2: np.ndarray, n_components=32) -
     return 1 / (1 + dtw_dist / len(r1))
 
 # =============== 主流程 ===============
-def compute_audio_features(audio_path: str, use_openl3=True) -> Optional[dict]:
+def compute_audio_features(audio_path: str, use_openl3: bool = True) -> Optional[Dict[str, Any]]:
     # 先試圖從快取讀取
     cached = load_audio_features_from_cache(audio_path)
     if cached:
@@ -506,7 +506,7 @@ def compute_audio_features(audio_path: str, use_openl3=True) -> Optional[dict]:
     save_audio_features_to_cache(audio_path, features)
     return features
 
-def compute_similarity(f1: dict, f2: dict) -> float:
+def compute_similarity(f1: Dict[str, Any], f2: Dict[str, Any]) -> float:
     detailed_scores = {}
     scores, weights = [], []
 
@@ -634,8 +634,8 @@ def audio_similarity(path1: str, path2: str) -> float:
     f1 = compute_audio_features(path1)
     f2 = compute_audio_features(path2)
     log_memory("完成")
-    print(f"✅ f1 keys: {list(f1.keys())}")
-    print(f"✅ f2 keys: {list(f2.keys())}")
+    print(f"f1 keys: {list(f1.keys())}")
+    print(f"f2 keys: {list(f2.keys())}")
     if not f1 or not f2:
         logger.error("音頻特徵提取失敗，無法比較")
         logger.error(f"音頻文件1: {path1}")

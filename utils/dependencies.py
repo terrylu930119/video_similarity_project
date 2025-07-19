@@ -5,16 +5,16 @@ import subprocess
 from utils.logger import logger
 
 # =============== 標記變數 ===============
-_checked_ffmpeg = False
-_checked_yt_dlp = False
-_checked_cuda = False
+_checked_ffmpeg: bool = False
+_checked_yt_dlp: bool = False
+_checked_cuda: bool = False
 
 # =============== 安裝需求 ===============
-def install_requirements():
+def install_requirements() -> None:
     os.system("pip install -r requirements.txt")
 
 # =============== 套件可用性檢查 ===============
-def check_ffmpeg():
+def check_ffmpeg() -> bool:
     global _checked_ffmpeg
     if _checked_ffmpeg:
         return True
@@ -28,7 +28,7 @@ def check_ffmpeg():
         logger.error("請安裝 ffmpeg：https://ffmpeg.org/download.html")
         return False
 
-def check_yt_dlp():
+def check_yt_dlp() -> bool:
     global _checked_yt_dlp
     if _checked_yt_dlp:
         return True
@@ -42,15 +42,15 @@ def check_yt_dlp():
         logger.error("請安裝 yt-dlp：pip install yt-dlp")
         return False
 
-def check_cuda():
+def check_cuda() -> bool:
     global _checked_cuda
     if _checked_cuda:
         return True
 
-    pytorch_cuda_available = torch.cuda.is_available()
+    pytorch_cuda_available: bool = torch.cuda.is_available()
     if pytorch_cuda_available:
-        device_count = torch.cuda.device_count()
-        device_name = torch.cuda.get_device_name(0)
+        device_count: int = torch.cuda.device_count()
+        device_name: str = torch.cuda.get_device_name(0)
         logger.info(f"PyTorch CUDA 可用: 設備數量={device_count}, 設備名稱={device_name}")
         _checked_cuda = True
         return True
@@ -59,7 +59,7 @@ def check_cuda():
         _checked_cuda = True
         return False
 
-def check_gpu_dependencies():
+def check_gpu_dependencies() -> bool:
     """檢查 GPU 相關相依套件狀態"""
     logger.info(f"PyTorch 版本: {torch.__version__}")
     logger.info(f"OpenCV 版本: {cv2.__version__}")
@@ -75,7 +75,7 @@ def check_gpu_dependencies():
         return False
 
 if __name__ == "__main__":
-    #install_requirements()
+    # install_requirements()
     check_ffmpeg()
     check_yt_dlp()
     check_gpu_dependencies()
