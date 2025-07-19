@@ -483,7 +483,7 @@ def warn_if_language_abnormal(lang: str, allowed: set = {"zh", "en", "ja"}):
     若語言異常則 log 警告。
     """
     if _debug_mode and (lang not in allowed):
-        logger.warning(f"⚠️ 語言偵測異常（{lang}），請檢查內容合理性")
+        logger.warning(f"語言偵測異常（{lang}），請檢查內容合理性")
 
 def format_segment_transcripts(transcripts: list[str], langs: list[str]) -> str:
     """

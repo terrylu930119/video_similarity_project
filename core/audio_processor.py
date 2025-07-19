@@ -143,7 +143,7 @@ def load_audio(audio_path: str) -> Generator[Tuple[np.ndarray, int], None, None]
             audio_path,
             block_length=int(chunk_duration * 22050),
             frame_length=2048,
-            hop_length=1024  # 增加 hop_length
+            hop_length=1024
         )
         
         for y_block in stream:
@@ -224,13 +224,13 @@ def save_audio_features_to_cache(audio_path: str, features: Dict[str, any]):
     lock_path = cache_path + ".lock"
     with FileLock(lock_path):
         if os.path.exists(cache_path):
-            logger.info(f"⚠️ 快取已存在，跳過儲存: {cache_path}")
+            logger.info(f"快取已存在，跳過儲存: {cache_path}")
             return
         try:
             np.savez_compressed(cache_path, **features)
-            logger.info(f"✅ 特徵快取儲存成功: {cache_path}")
+            logger.info(f"特徵快取儲存成功: {cache_path}")
         except Exception as e:
-            logger.warning(f"⚠️ 儲存特徵快取失敗: {e}")
+            logger.warning(f"儲存特徵快取失敗: {e}")
 
 def load_audio_features_from_cache(audio_path: str) -> Optional[Dict[str, any]]:
     try:
@@ -239,10 +239,10 @@ def load_audio_features_from_cache(audio_path: str) -> Optional[Dict[str, any]]:
             return None
         data = np.load(cache_path, allow_pickle=True)
         loaded = {k: data[k].item() if data[k].shape == () else data[k] for k in data}
-        logger.info(f"📦 載入特徵快取成功: {cache_path}")
+        logger.info(f"載入特徵快取成功: {cache_path}")
         return loaded
     except Exception as e:
-        logger.warning(f"⚠️ 載入特徵快取失敗: {e}")
+        logger.warning(f"載入特徵快取失敗: {e}")
         return None
 
 def perceptual_score(sim_score: float) -> float:
@@ -299,7 +299,7 @@ def extract_dl_features(audio_path: str, chunk_sec=10.0) -> Optional[np.ndarray]
                     pooled = torch.mean(mel, dim=2).squeeze().cpu().numpy()
                 features.append(pooled)
             except Exception as e:
-                print(f"⚠️ DL chunk {i//chunk_size} failed: {e}")
+                print(f"DL chunk {i//chunk_size} failed: {e}")
                 continue
         if not features:
             logger.warning(f"DL 特徵全部失敗: {audio_path}")
@@ -354,7 +354,7 @@ def extract_openl3_features(audio_path: str, chunk_sec=10.0) -> Optional[dict]:
         chunk_size = int(chunk_sec * sr)
         model = get_openl3_model()
         if np.max(np.abs(audio)) < 1e-5 or audio.shape[1] < sr:
-            logger.warning(f"⚠️ 音訊近乎靜音或長度不足，跳過：{audio_path}")
+            logger.warning(f"音訊近乎靜音或長度不足，跳過：{audio_path}")
             return None
         emb_list = []
         for i in range(0, audio.shape[1], chunk_size):
@@ -378,12 +378,12 @@ def extract_openl3_features(audio_path: str, chunk_sec=10.0) -> Optional[dict]:
                 if emb.ndim == 2 and emb.shape[1] == 512:
                     emb_list.append(np.mean(emb, axis=0))
                 else:
-                    logger.warning(f"⚠️ OpenL3 特徵 shape 不一致：{emb.shape}")
+                    logger.warning(f"OpenL3 特徵 shape 不一致：{emb.shape}")
             except Exception as sub_e:
-                logger.warning(f"❌ OpenL3 子段錯誤: {sub_e}")
+                logger.warning(f"OpenL3 子段錯誤: {sub_e}")
                 continue
         if not emb_list:
-            logger.warning(f"❌ OpenL3 全部段落提取失敗：{audio_path}")
+            logger.warning(f"OpenL3 全部段落提取失敗：{audio_path}")
             return None
         emb_array = np.stack(emb_list)
         gpu_manager.clear_gpu_memory()
@@ -544,18 +544,18 @@ def compute_similarity(f1: dict, f2: dict) -> float:
             scores.append(sim)
             weights.append(SIMILARITY_WEIGHTS.get('openl3_features', 1.0))
             detailed_scores['openl3_chunkwise'] = (sim, SIMILARITY_WEIGHTS.get('openl3_chunkwise', 1.0))
-            logger.info(f'✅ OpenL3 chunkwise DTW 相似度: {sim:.4f}')
+            logger.info(f'OpenL3 chunkwise DTW 相似度: {sim:.4f}')
 
     for k in ['dl_features', 'pann_features', 'openl3_features']:
         v1 = f1.get(k)
         v2 = f2.get(k)
 
-        logger.info(f"🧪 比對特徵 {k}:")
-        logger.info(f"  v1 type: {type(v1)}, shape: {getattr(v1, 'shape', None) if not isinstance(v1, dict) else 'dict'}")
-        logger.info(f"  v2 type: {type(v2)}, shape: {getattr(v2, 'shape', None) if not isinstance(v2, dict) else 'dict'}")
+        logger.info(f"比對特徵 {k}:")
+        logger.info(f"v1 type: {type(v1)}, shape: {getattr(v1, 'shape', None) if not isinstance(v1, dict) else 'dict'}")
+        logger.info(f"v2 type: {type(v2)}, shape: {getattr(v2, 'shape', None) if not isinstance(v2, dict) else 'dict'}")
 
         if v1 is None or v2 is None:
-            logger.warning(f"❌ 特徵 {k} 為 None，跳過")
+            logger.warning(f"特徵 {k} 為 None，跳過")
             continue
 
         try:
@@ -566,7 +566,7 @@ def compute_similarity(f1: dict, f2: dict) -> float:
 
                 # 判斷是否完全一致，避免 PCA 發生 NaN
                 if np.allclose(emb1, emb2, atol=1e-5):
-                    logger.info("✅ pann 嵌入向量完全一致，跳過 PCA")
+                    logger.info("pann 嵌入向量完全一致，跳過 PCA")
                     sim1 = 1.0
                 else:
                     try:
@@ -578,7 +578,7 @@ def compute_similarity(f1: dict, f2: dict) -> float:
                         emb2_pca = np.nan_to_num(emb2_pca)
                         sim1 = cos_sim(emb1_pca, emb2_pca)
                     except Exception as e:
-                        logger.warning(f"⚠️ pann PCA 比對失敗，改用原始向量: {e}")
+                        logger.warning(f"pann PCA 比對失敗，改用原始向量: {e}")
                         sim1 = cos_sim(emb1, emb2)
 
                 # top-5 類別比對
@@ -592,7 +592,7 @@ def compute_similarity(f1: dict, f2: dict) -> float:
                 if 'merged' in v1 and 'merged' in v2:
                     sim = cos_sim(v1['merged'], v2['merged'])
                 else:
-                    logger.warning(f"❌ openl3_features 缺少 merged 向量，跳過")
+                    logger.warning(f"openl3_features 缺少 merged 向量，跳過")
                     continue
             else:
                 if isinstance(v1, np.ndarray) and v1.ndim == 2:
@@ -600,7 +600,7 @@ def compute_similarity(f1: dict, f2: dict) -> float:
                 if isinstance(v2, np.ndarray) and v2.ndim == 2:
                     v2 = np.mean(v2, axis=0)
                 if not is_valid_vector(v1) or not is_valid_vector(v2):
-                    logger.warning(f"❌ 特徵格式不合法: {k}")
+                    logger.warning(f"特徵格式不合法: {k}")
                     continue
                 sim = cos_sim(v1, v2)
 
@@ -608,25 +608,25 @@ def compute_similarity(f1: dict, f2: dict) -> float:
             scores.append(sim)
             weights.append(weight)
             detailed_scores[k] = (sim, weight)
-            logger.info(f"✅ 成功比對 {k}，相似度: {sim:.4f}，權重: {weight}")
+            logger.info(f"成功比對 {k}，相似度: {sim:.4f}，權重: {weight}")
 
         except Exception as e:
-            logger.error(f"❌ 比對 {k} 發生錯誤: {e}")
+            logger.error(f"比對 {k} 發生錯誤: {e}")
 
     if not scores:
         logger.error("所有相似度評估皆失敗，無法進行加權")
         return 0.0
 
     if len(scores) != len(weights):
-        logger.error(f"❗相似度與權重長度不一致: scores={len(scores)}, weights={len(weights)}")
+        logger.error(f"相似度與權重長度不一致: scores={len(scores)}, weights={len(weights)}")
         logger.error(f"scores={scores}")
         logger.error(f"weights={weights}")
         return 0.0
 
     final_score = float(np.average(scores, weights=weights))
-    logger.info("📊 特徵比對詳情：")
+    logger.info("特徵比對詳情：")
     for name, (score, weight) in detailed_scores.items():
-        logger.info(f"  🔹 {name:20s} | 相似度: {score:.4f} | 權重: {weight}")
+        logger.info(f"  {name:20s} | 相似度: {score:.4f} | 權重: {weight}")
     return final_score
 
 def audio_similarity(path1: str, path2: str) -> float:

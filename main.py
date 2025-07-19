@@ -86,7 +86,7 @@ def cleanup_files(path: str):
             logger.info(f"清理: {path}")
             shutil.rmtree(path)
         except PermissionError as e:
-            logger.warning(f"⚠️ 無法刪除部分檔案（可能正在使用中）: {e}")
+            logger.warning(f"無法刪除部分檔案（可能正在使用中）: {e}")
         except Exception as e:
             logger.error(f"清理失敗: {str(e)}")
 
@@ -119,19 +119,8 @@ def main():
     if len(sys.argv) == 1:
         # 預設測試參數（無 CLI 時）
         args = parser.parse_args([
-            '--ref', 'https://www.youtube.com/watch?v=dxmmSFQxWzM&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO',
-            '--comp', 'https://www.youtube.com/watch?v=Bzl61esi4qc&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=2',
-            'https://www.youtube.com/watch?v=HagaJboujK4&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=3',
-            'https://www.youtube.com/watch?v=Z6cOxtDsfNU&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=4',
-            'https://www.youtube.com/watch?v=7D2uGv7aprQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=5',
-            'https://www.youtube.com/watch?v=jQraN1emvLQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=6',
-            'https://www.youtube.com/watch?v=RONGNWb7OpQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=7',
-            'https://www.youtube.com/watch?v=uh9jUhVTS28&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=8',
-            'https://www.youtube.com/watch?v=pGrI6hk0vBg&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=9',
-            'https://www.youtube.com/watch?v=m9cjOcCKIyQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=10',
-            'https://www.youtube.com/watch?v=Cfm8TWGkvYQ&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=11',
-            'https://www.youtube.com/watch?v=UtSEFdDZZLw&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=12',
-            'https://www.youtube.com/watch?v=3LLj3fTpRoM&list=PL12UaAf_xzfo6TAmxIM7rEvrJAB0rzAAO&index=13',
+            '--ref', '',
+            '--comp', '',
             '--interval', 'auto',
             '--output', 'downloads',
             '--cache', 'feature_cache',
