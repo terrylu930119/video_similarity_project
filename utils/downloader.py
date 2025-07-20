@@ -3,8 +3,12 @@ import re
 import hashlib
 import yt_dlp
 import urllib.parse
+import urllib.request
+from pathlib import Path
 from utils.logger import logger
 from typing import Dict
+
+_pann_weight_checked = False
 
 # =============== URL 檢查與命名工具 ===============
 def is_valid_url(url: str) -> bool:
@@ -32,7 +36,7 @@ def generate_safe_filename(url: str) -> str:
         return url_hash
 
 # =============== 影片下載主函式 ===============
-def download_video(url: str, output_dir: str, resolution: str = "480p", max_retries: int = 3) -> str:
+def download_video(url: str, output_dir: str, resolution: str = "720p", max_retries: int = 3) -> str:
     if not is_valid_url(url):
         raise ValueError(f"無效的 URL: {url}")
 
@@ -101,3 +105,23 @@ def download_video(url: str, output_dir: str, resolution: str = "480p", max_retr
         if os.path.exists(output_path):
             os.remove(output_path)
         raise
+
+def ensure_pann_weights(expected_size: int = 340_000_000) -> Path:
+    """
+    確保 PANN 權重檔案存在且完整，否則自動下載。
+    回傳權重檔案的完整路徑。
+    """
+    global _pann_weight_checked
+    checkpoint_path = Path.home() / 'panns_data' / 'Cnn14_mAP=0.431.pth'
+    if checkpoint_path.exists() and checkpoint_path.stat().st_size > expected_size * 0.95:
+        if not _pann_weight_checked:
+            logger.info(f"PANN 權重已存在且完整: {checkpoint_path}")
+            _pann_weight_checked = True
+        return checkpoint_path
+    # 若不存在或損壞則下載
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    url = 'https://zenodo.org/record/3987831/files/Cnn14_mAP%3D0.431.pth?download=1'
+    logger.info(f"下載 PANN 權重到 {checkpoint_path} ...")
+    urllib.request.urlretrieve(url, checkpoint_path)
+    logger.info("PANN 權重下載完成。")
+    return checkpoint_path
