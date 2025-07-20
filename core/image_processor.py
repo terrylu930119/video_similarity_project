@@ -163,7 +163,7 @@ def dtw_similarity(emb_seq1: np.ndarray,
     return sim
 
 def quick_ssim_check(img1_path: str, img2_path: str, thresh: float = 0.93) -> bool:
-    """Fast structural‑similarity check (grayscale)."""
+    """快速結構相似度檢查（灰度）"""
     try:
         img1 = cv2.imread(img1_path)
         img2 = cv2.imread(img2_path)
@@ -176,7 +176,7 @@ def quick_ssim_check(img1_path: str, img2_path: str, thresh: float = 0.93) -> bo
         score, _ = ssim(gray1, gray2, full=True)
         return score >= thresh
     except Exception as e:
-        logger.error(f"SSIM quick check error: {e}")
+        logger.error(f"SSIM 快速檢查錯誤 : {e}")
         return False
 # =============== 影片相似度比對主流程 ===============
 def video_similarity(frames1: List[str], frames2: List[str],
@@ -226,9 +226,9 @@ def video_similarity(frames1: List[str], frames2: List[str],
         avg_phash = float(np.mean(phash_similarities)) if phash_similarities else 0.0
         matched_ratio = len(similar_pairs) / len(valid1) if valid1 else 0.0
 
-        # --- fallback when too few similar pairs ---
+        # --- 當相似對太少時回退 ---
         if len(similar_pairs) < len(valid1) * 0.2:
-            logger.warning("Too few similar pairs, applying relaxed fallback matching.")
+            logger.warning("相似對太少，應用寬鬆的後備匹配")
             similar_pairs = [
                 (f1, f2)
                 for (f1, p1) in valid1
