@@ -15,11 +15,15 @@ from utils.logger import logger
 from collections import OrderedDict
 from sklearn.decomposition import PCA
 from utils.gpu_utils import gpu_manager
+from panns_inference.models import Cnn14
 from librosa.feature.rhythm import tempo
+from utils.downloader import ensure_pann_weights
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Generator, Tuple, Dict, Any, List
 
 # =============== 全局配置参数 ===============
+_pann_model_loaded = False
+
 AUDIO_CONFIG = {
     'sample_rate': 32000,
     'channels': 1,
@@ -84,15 +88,20 @@ def get_openl3_model():
 
 @lru_cache(maxsize=1)
 def get_pann_model():
-    global pann_model
-    if pann_model is None:
-        from panns_inference.models import Cnn14
-        pann_model = Cnn14(
-            sample_rate=AUDIO_CONFIG['sample_rate'], window_size=1024, hop_size=320,
-            mel_bins=64, fmin=50, fmax=14000, classes_num=527
-        ).to(device)
-        pann_model.eval()
-    return pann_model
+    global _pann_model_loaded
+    checkpoint_path = ensure_pann_weights()
+    model = Cnn14(
+        sample_rate=AUDIO_CONFIG['sample_rate'], window_size=1024,
+        hop_size=320, mel_bins=64, fmin=50, fmax=14000, classes_num=527,
+    )
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint['model'])
+    if not _pann_model_loaded:
+        logger.info("PANN 模型權重載入成功")
+        _pann_model_loaded = True
+    model = model.to(device)
+    model.eval()
+    return model
 
 @lru_cache(maxsize=32)
 def get_optimal_chunk_size(file_size: int) -> float:
@@ -222,9 +231,16 @@ def get_cache_path(audio_path: str) -> str:
 def save_audio_features_to_cache(audio_path: str, features: Dict[str, any]) -> None:
     cache_path = get_cache_path(audio_path)
     lock_path = cache_path + ".lock"
+    
+    # 先檢查檔案是否已存在（避免不必要的鎖定）
+    if os.path.exists(cache_path):
+        logger.debug(f"快取已存在，跳過儲存: {cache_path}")
+        return
+    
     with FileLock(lock_path):
+        # 再次檢查（防止在等待鎖定期間其他執行緒已建立檔案）
         if os.path.exists(cache_path):
-            logger.info(f"快取已存在，跳過儲存: {cache_path}")
+            logger.debug(f"快取已存在，跳過儲存: {cache_path}")
             return
         try:
             np.savez_compressed(cache_path, **features)
@@ -315,15 +331,22 @@ def extract_dl_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[np
 def extract_pann_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[np.ndarray]:
     try:
         waveform, sr = torchaudio.load(audio_path)
+
         if sr != AUDIO_CONFIG['sample_rate']:
             waveform = torchaudio.transforms.Resample(sr, AUDIO_CONFIG['sample_rate'])(waveform)
             sr = AUDIO_CONFIG['sample_rate']
+            
         model = get_pann_model()
+
+        if model is None:
+            logger.error("[PANN] 模型初始化失敗")
+            return None
+        
         chunk_size = int(chunk_sec * sr)
         chunks = [waveform[:, i:i+chunk_size] for i in range(0, waveform.shape[1], chunk_size) if waveform[:, i:i+chunk_size].shape[1] >= sr]
         emb_list = []
         tag_vec_sum = None
-        for c in chunks:
+        for idx, c in enumerate(chunks):
             with torch.no_grad():
                 out = model(c.to(device))
                 emb = out['embedding'].squeeze().cpu().numpy()
@@ -331,12 +354,14 @@ def extract_pann_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[
                 emb_list.append(emb[:2048])
                 tag_vec_sum = tags if tag_vec_sum is None else tag_vec_sum + tags
         if not emb_list:
+            logger.warning(f"[PANN] 沒有有效的chunk: {audio_path}")
             return None
-        emb_mean = np.mean(np.stack(emb_list), axis=0)
+        emb_arr = np.stack(emb_list)
+        emb_mean = np.mean(emb_arr, axis=0)
         tag_vec_mean = tag_vec_sum / len(emb_list)
         return np.concatenate([emb_mean, tag_vec_mean]).astype(np.float32)
     except Exception as e:
-        print(f"PANN error: {e}")
+        logger.error(f"[PANN] 特徵提取失敗: {e}")
         return None
 
 def extract_openl3_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[Dict[str, np.ndarray]]:
@@ -564,29 +589,15 @@ def compute_similarity(f1: Dict[str, Any], f2: Dict[str, Any]) -> float:
                 emb1, tag1 = v1[:split], v1[split:]
                 emb2, tag2 = v2[:split], v2[split:]
 
-                # 判斷是否完全一致，避免 PCA 發生 NaN
-                if np.allclose(emb1, emb2, atol=1e-5):
-                    logger.info("pann 嵌入向量完全一致，跳過 PCA")
-                    sim1 = 1.0
-                else:
-                    try:
-                        fit_pca_if_needed('pann_emb', np.stack([emb1, emb2]), n_components=128)
-                        emb1_pca = apply_pca('pann_emb', emb1, n_components=128)
-                        emb2_pca = apply_pca('pann_emb', emb2, n_components=128)
-                        # 若出現 NaN，轉成 0
-                        emb1_pca = np.nan_to_num(emb1_pca)
-                        emb2_pca = np.nan_to_num(emb2_pca)
-                        sim1 = cos_sim(emb1_pca, emb2_pca)
-                    except Exception as e:
-                        logger.warning(f"pann PCA 比對失敗，改用原始向量: {e}")
-                        sim1 = cos_sim(emb1, emb2)
+                # 1. Embedding 相似度（不做 PCA，直接算 cosine）
+                sim1 = cos_sim(emb1, emb2)
 
-                # top-5 類別比對
-                top1 = set(np.argsort(tag1)[-5:])
-                top2 = set(np.argsort(tag2)[-5:])
-                jaccard = len(top1 & top2) / len(top1 | top2) if top1 | top2 else 0.0
+                # 2. 標籤相似度（連續化 cosine，而非二值 Jaccard）
+                tag_sim = cos_sim(tag1, tag2)
 
-                sim = 0.7 * sim1 + 0.3 * jaccard
+                # 3. 權重組合
+                sim = 0.6 * sim1 + 0.4 * tag_sim
+                logger.info(f"[PANN] emb_sim: {sim1:.4f}, tag_sim: {tag_sim:.4f}, combined: {sim:.4f}")
 
             elif k == 'openl3_features' and isinstance(v1, dict) and isinstance(v2, dict):
                 if 'merged' in v1 and 'merged' in v2:
