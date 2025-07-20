@@ -150,14 +150,25 @@ def calculate_overall_similarity(audio1: str, audio2: str, image1: Union[str, Li
 
         if not is_meaningful:
             logger.warning(f"文本相似度計算跳過: {reason}")
-            total_weight = weights['audio'] + weights['image']
-            audio_weight = weights['audio'] / total_weight
-            image_weight = weights['image'] / total_weight
+            # 將文本權重重新分配給音訊和畫面
+            text_weight = weights['text']
+            total_remaining_weight = weights['audio'] + weights['image']
+            
+            if total_remaining_weight > 0:
+                # 按比例重新分配文本權重
+                audio_weight = weights['audio'] + (text_weight * weights['audio'] / total_remaining_weight)
+                image_weight = weights['image'] + (text_weight * weights['image'] / total_remaining_weight)
+            else:
+                # 如果音訊和畫面權重都為0，平均分配
+                audio_weight = text_weight / 2
+                image_weight = text_weight / 2
+            
             weights = {
                 'audio': audio_weight,
                 'image': image_weight,
                 'text': 0.0
             }
+            logger.info(f"權重重新分配: 音訊={audio_weight:.3f}, 畫面={image_weight:.3f}, 文本=0.0")
         else:
             weights = weights.copy()
 
