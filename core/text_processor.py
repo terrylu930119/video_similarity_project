@@ -18,12 +18,30 @@ from utils.audio_cleaner import load_and_clean_audio
 from sentence_transformers import SentenceTransformer, util
 
 # ======================== 全域模型 ========================
-_whisper_model: WhisperModel | None = None      # ★ 單例
-_whisper_lock  = threading.Lock()              # ★ 簡單互斥
+_whisper_model: WhisperModel | None = None      # 單例
+_whisper_lock  = threading.Lock()               # 簡單互斥
 _sentence_transformer: SentenceTransformer | None = None
 _debug_mode: bool = False
 
-# ======================== 模型載入函式 ========================
+# ======================== Meta Tensor 修復函數 ========================
+def fix_meta_tensor_issue(model: SentenceTransformer, target_device: torch.device) -> SentenceTransformer:
+    try:
+        # 先嘗試 .to()
+        model = model.to(target_device)
+    except Exception as e:
+        if "meta" in str(e):
+            logger.warning("偵測到 meta tensor，改用 to_empty()")
+            try:
+                model = model.to_empty(device=target_device)
+            except Exception as e2:
+                logger.error(f"to_empty() 也失敗: {e2}")
+                raise
+        else:
+            raise
+    model.eval()
+    return model
+
+# ======================== 模型載入函數 ========================
 def get_whisper_model() -> WhisperModel:
     """
     全域只載入一次 WhisperModel。
@@ -39,19 +57,33 @@ def get_whisper_model() -> WhisperModel:
     return _whisper_model
 
 def get_sentence_transformer() -> SentenceTransformer:
-    """載入 (或回傳已載入的) SentenceTransformer。"""
     global _sentence_transformer
+    if _sentence_transformer is not None:
+        return _sentence_transformer
 
-    if _sentence_transformer is None:
-        logger.info("正在載入 SentenceTransformer…")
-        _sentence_transformer = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
+    logger.info("正在載入 SentenceTransformer…")
 
-        # 若有 GPU 則移至 GPU
-        if gpu_manager.get_device().type == "cuda":
-            logger.info("將 SentenceTransformer 移至 GPU…")
-            _sentence_transformer = _sentence_transformer.to(gpu_manager.get_device())
-
+    try:
+        model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
+        _ = model.encode("test", convert_to_tensor=True)  # 強制初始化，避免 meta tensor
+        device = gpu_manager.get_device()
+        logger.info(f"將 SentenceTransformer 移至 {device}（含 meta tensor 檢查）…")
+        model = fix_meta_tensor_issue(model, device)
+        model.eval()
+        _sentence_transformer = model
         logger.info("SentenceTransformer 載入完成！")
+
+    except Exception as e:
+        logger.error(f"載入 SentenceTransformer 失敗，回退 CPU 模式: {e}")
+        try:
+            model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
+            _ = model.encode("test", convert_to_tensor=True)
+            model = fix_meta_tensor_issue(model, torch.device("cpu"))
+            _sentence_transformer = model
+            logger.info("SentenceTransformer 載入完成（CPU 模式）")
+        except Exception as e2:
+            logger.error(f"CPU 模式也失敗: {e2}")
+            raise RuntimeError("無法載入 SentenceTransformer 模型")
 
     return _sentence_transformer
 
@@ -497,10 +529,25 @@ def format_segment_transcripts(transcripts: list[str], langs: list[str]) -> str:
 # ======================== 文本分析與比對 ========================
 def compute_text_embedding(text: str) -> torch.Tensor | None:
     """計算文本向量。"""
-    model = get_sentence_transformer()
     try:
+        model = get_sentence_transformer()
+        
+        # 確保模型在正確的設備上
+        device = gpu_manager.get_device()
+        
         with torch.no_grad():
-            return model.encode(text, convert_to_tensor=True)
+            embedding = model.encode(text, convert_to_tensor=True)
+            
+            # 確保嵌入向量在正確的設備上
+            if embedding.device != device:
+                try:
+                    embedding = embedding.to(device)
+                except Exception as e:
+                    logger.warning(f"無法將嵌入向量移至 {device}，使用 CPU: {str(e)}")
+                    embedding = embedding.cpu()
+            
+            return embedding
+            
     except Exception as e:  # noqa: BLE001
         logger.error(f"計算文本嵌入向量時出錯: {str(e)}")
         return None
