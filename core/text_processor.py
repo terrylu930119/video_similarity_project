@@ -18,28 +18,10 @@ from utils.audio_cleaner import load_and_clean_audio
 from sentence_transformers import SentenceTransformer, util
 
 # ======================== 全域模型 ========================
-_whisper_model: WhisperModel | None = None      # 單例
-_whisper_lock  = threading.Lock()               # 簡單互斥
+_whisper_model: WhisperModel | None = None      
+_whisper_lock  = threading.Lock()
 _sentence_transformer: SentenceTransformer | None = None
 _debug_mode: bool = False
-
-# ======================== Meta Tensor 修復函數 ========================
-def fix_meta_tensor_issue(model: SentenceTransformer, target_device: torch.device) -> SentenceTransformer:
-    try:
-        # 先嘗試 .to()
-        model = model.to(target_device)
-    except Exception as e:
-        if "meta" in str(e):
-            logger.warning("偵測到 meta tensor，改用 to_empty()")
-            try:
-                model = model.to_empty(device=target_device)
-            except Exception as e2:
-                logger.error(f"to_empty() 也失敗: {e2}")
-                raise
-        else:
-            raise
-    model.eval()
-    return model
 
 # ======================== 模型載入函數 ========================
 def get_whisper_model() -> WhisperModel:
@@ -61,31 +43,12 @@ def get_sentence_transformer() -> SentenceTransformer:
     if _sentence_transformer is not None:
         return _sentence_transformer
 
-    logger.info("正在載入 SentenceTransformer…")
+    model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2",device=gpu_manager.get_device())
+    model.encode("test", convert_to_tensor=True)  # 強制權重實體化
+    model.eval()
 
-    try:
-        model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
-        _ = model.encode("test", convert_to_tensor=True)  # 強制初始化，避免 meta tensor
-        device = gpu_manager.get_device()
-        logger.info(f"將 SentenceTransformer 移至 {device}（含 meta tensor 檢查）…")
-        model = fix_meta_tensor_issue(model, device)
-        model.eval()
-        _sentence_transformer = model
-        logger.info("SentenceTransformer 載入完成！")
-
-    except Exception as e:
-        logger.error(f"載入 SentenceTransformer 失敗，回退 CPU 模式: {e}")
-        try:
-            model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2")
-            _ = model.encode("test", convert_to_tensor=True)
-            model = fix_meta_tensor_issue(model, torch.device("cpu"))
-            _sentence_transformer = model
-            logger.info("SentenceTransformer 載入完成（CPU 模式）")
-        except Exception as e2:
-            logger.error(f"CPU 模式也失敗: {e2}")
-            raise RuntimeError("無法載入 SentenceTransformer 模型")
-
-    return _sentence_transformer
+    _sentence_transformer = model
+    return model
 
 # ======================== URL 與字幕處理 ========================
 def get_subtitle_language(filename: str) -> str:
@@ -273,7 +236,7 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
                     logger.error(f"片段 {i} 儲存失敗: {e}")
                     return None
 
-            with ThreadPoolExecutor(max_workers=min(os.cpu_count() - 2, 4)) as pool:
+            with ThreadPoolExecutor(max_workers=max(1, min(os.cpu_count() - 2, 4))) as pool:
                 segs = list(pool.map(lambda i: _save_segment_seg(i, y, sr), range(num_segments)))
             segment_paths.extend([p for p in segs if p])
 
@@ -466,7 +429,7 @@ def is_excessive_repetition(text: str, phrase_threshold: int = 20, length_thresh
             return True
     return False
 
-def is_meaningful_text(text: str, min_length: int = 10) -> tuple:
+def is_meaningful_text(text: str, min_length: int = 10) -> tuple[bool, str]:
     """粗略判斷文本是否『有意義』(非重複、長度足夠)。"""
     try:
         if not text.strip():
