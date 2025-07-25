@@ -23,6 +23,39 @@ _whisper_lock  = threading.Lock()
 _sentence_transformer: SentenceTransformer | None = None
 _debug_mode: bool = False
 
+# ======================== meta tensor 檢查 ========================
+def check_tensor_status(tensor: torch.Tensor, name: str = "tensor") -> bool:
+    """檢查 tensor 狀態，避免 meta tensor 問題"""
+    try:
+        if hasattr(tensor, 'is_meta') and tensor.is_meta:
+            logger.error(f"{name} 是 meta tensor，無法進行計算")
+            return False
+            
+        if tensor.numel() == 0:
+            logger.warning(f"{name} 是空 tensor")
+            return False
+            
+        # 嘗試訪問數據
+        _ = tensor.sum()
+        return True
+        
+    except Exception as e:
+        logger.error(f"檢查 {name} 時出錯: {e}")
+        return False
+
+def safe_tensor_operation(tensor1: torch.Tensor, tensor2: torch.Tensor, operation_name: str):
+    """安全的 tensor 操作"""
+    if not check_tensor_status(tensor1, "tensor1"):
+        return None
+    if not check_tensor_status(tensor2, "tensor2"):
+        return None
+        
+    try:
+        return util.pytorch_cos_sim(tensor1, tensor2)
+    except Exception as e:
+        logger.error(f"{operation_name} 操作失敗: {e}")
+        return None
+    
 # ======================== 模型載入函數 ========================
 def get_whisper_model() -> WhisperModel:
     """
@@ -43,12 +76,35 @@ def get_sentence_transformer() -> SentenceTransformer:
     if _sentence_transformer is not None:
         return _sentence_transformer
 
-    model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2",device=gpu_manager.get_device())
-    model.encode("test", convert_to_tensor=True)  # 強制權重實體化
-    model.eval()
-
-    _sentence_transformer = model
-    return model
+    try:
+        device = gpu_manager.get_device()
+        
+        # 先在 CPU 上載入模型
+        model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2", device='cpu')
+        
+        # 確保模型完全初始化
+        _ = model.encode("test initialization", convert_to_tensor=False)
+        
+        # 然後安全地移動到目標設備
+        if device.type == "cuda":
+            model = model.to(device)
+            
+        # 再次測試以確保權重已實體化
+        test_embedding = model.encode("test", convert_to_tensor=True)
+        if test_embedding.is_meta:
+            raise RuntimeError("模型仍在 meta device 上")
+            
+        model.eval()
+        _sentence_transformer = model
+        return model
+        
+    except Exception as e:
+        logger.error(f"載入 SentenceTransformer 失敗: {e}")
+        # 回退到 CPU
+        model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2", device='cpu')
+        model.eval()
+        _sentence_transformer = model
+        return model
 
 # ======================== URL 與字幕處理 ========================
 def get_subtitle_language(filename: str) -> str:
@@ -491,27 +547,39 @@ def format_segment_transcripts(transcripts: list[str], langs: list[str]) -> str:
 
 # ======================== 文本分析與比對 ========================
 def compute_text_embedding(text: str) -> torch.Tensor | None:
-    """計算文本向量。"""
+    """計算文本向量，修復 meta tensor 問題。"""
     try:
         model = get_sentence_transformer()
-        
-        # 確保模型在正確的設備上
         device = gpu_manager.get_device()
         
         with torch.no_grad():
-            embedding = model.encode(text, convert_to_tensor=True)
+            # 直接指定設備進行編碼
+            if device.type == "cuda":
+                embedding = model.encode(text, convert_to_tensor=True, device=device)
+            else:
+                embedding = model.encode(text, convert_to_tensor=True)
             
-            # 確保嵌入向量在正確的設備上
-            if embedding.device != device:
+            # 檢查是否為 meta tensor
+            if hasattr(embedding, 'is_meta') and embedding.is_meta:
+                logger.warning("檢測到 meta tensor，重新編碼到 CPU")
+                embedding = model.encode(text, convert_to_tensor=True, device='cpu')
+            
+            # 確保 tensor 在正確設備上且不是 meta
+            if embedding.device != device and not embedding.is_meta:
                 try:
-                    embedding = embedding.to(device)
+                    # 使用 to_empty() 方法而非 to() 方法
+                    if hasattr(embedding, 'to_empty'):
+                        empty_tensor = torch.empty_like(embedding).to(device)
+                        empty_tensor.copy_(embedding)
+                        embedding = empty_tensor
+                    else:
+                        embedding = embedding.to(device)
                 except Exception as e:
-                    logger.warning(f"無法將嵌入向量移至 {device}，使用 CPU: {str(e)}")
-                    embedding = embedding.cpu()
+                    logger.warning(f"無法將嵌入向量移至 {device}，使用原設備: {str(e)}")
             
             return embedding
             
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.error(f"計算文本嵌入向量時出錯: {str(e)}")
         return None
 
@@ -538,10 +606,6 @@ def text_similarity(text1: str, text2: str) -> tuple[float, bool, str]:
 
     len_ratio = min(len(text1), len(text2)) / max(len(text1), len(text2))
     adj_sim = sim * (0.7 + 0.3 * len_ratio)  # 長度差異調整
-    
-    # 確保清理所有資源
-    if gpu_manager.get_device().type == "cuda":
-        gpu_manager.clear_gpu_memory()
 
     logger.info(f"文本相似度: 原始={sim:.4f}, 調整後={adj_sim:.4f}, 長度比例={len_ratio:.2f}")
     return adj_sim, True, f"length_ratio={len_ratio:.2f}"
