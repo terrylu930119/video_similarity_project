@@ -19,6 +19,7 @@ from panns_inference.models import Cnn14
 from librosa.feature.rhythm import tempo
 from utils.downloader import ensure_pann_weights
 from concurrent.futures import ThreadPoolExecutor
+from sklearn.metrics.pairwise import cosine_similarity
 from typing import Optional, Generator, Tuple, Dict, Any, List
 
 # =============== 全局配置参数 ===============
@@ -40,16 +41,30 @@ FEATURE_CONFIG = {
 }
 
 SIMILARITY_WEIGHTS = {
-    'dl_features': 1.5,       # 比對深度學習模型提取的高層特徵，包含音色、音質等複雜特徵
-    'pann_features': 1.4,     # 比對音頻場景分類特徵，用於識別環境音和背景音
-    'openl3_features': 1.7,   # 比對音頻嵌入向量，捕捉音頻的語義信息
-    'openl3_chunkwise': 0.5,  # chunkwise DTW 結構相似度
-    'onset': 1.0,             # 比對音頻的起始點和節奏變化點
-    'mfcc': 1.5,              # 比對梅爾頻率倒譜係數，主要用於音色和音質比對
-    'mfcc_delta': 1.5,        # 比對 MFCC 的動態變化，反映音頻的時變特性
-    'chroma': 1.5,            # 比對音高分布特徵，用於和聲和調性分析
-    'tempo': 1.4              # 比對節奏速度特徵，反映音樂的節奏特性
+    # 深度學習模型特徵
+    'dl_features': 2.2,             # 利用 MelSpectrogram 統計表示整體音色輪廓（類似人耳感受）
+    'pann_features': 2.4,           # 結合音訊分類模型（如環境聲音、場景、音效標籤）的特徵與分類輸出
+    'openl3_features': 1.8,         # 音訊語義嵌入（整體語意、音質風格）特徵
+    'openl3_chunkwise': 0.5,        # OpenL3 分段特徵的結構性比對（用 DTW 抓時間軸變化一致性）
+
+    # 傳統統計特徵（總體設定，當細項缺失時使用）
+    'mfcc': 1.4,                    # 音色輪廓（主頻能量分布），模擬聽感頻率響應
+    'mfcc_delta': 1.2,              # MFCC 變化量，模擬語音/音樂的滑音、變化性
+    'chroma': 1.5,                  # 音高與和聲（十二平均律對應的能量）
+
+    # 統計細項（比對用於細節控制）
+    'mfcc_mean': 1.4,               # 平均 MFCC：整體音色分布（傾向於穩定的 timbre）
+    'mfcc_std': 1.3,                # MFCC 標準差：音色的起伏與變化性
+    'mfcc_delta_mean': 0.6,         # 動態 MFCC 平均：整體變化趨勢（語速、連續性）
+    'mfcc_delta_std': 1.5,          # 動態 MFCC 標準差：滑音、抖音、情緒起伏
+    'chroma_mean': 1.3,             # 平均音高能量：主要音調特徵（旋律主色調）
+    'chroma_std': 1.3,              # 音高能量變化：轉調、和聲複雜度等
+
+    # 節奏與結構
+    'onset_env': 1.4,               # 音訊起始點強度變化（打擊點、節奏感）
+    'tempo': 1.4,                   # 節奏速度（BPM）與變化程度，用來比對歌曲速度與律動
 }
+
 
 THREAD_CONFIG = {'max_workers': 6}
 CROP_CONFIG = {'min_duration': 30.0, 'max_duration': 300.0, 'overlap': 0.5, 'silence_threshold': -14}
@@ -64,7 +79,27 @@ device = gpu_manager.get_device()
 pann_model: Optional[torch.nn.Module] = None
 openl3_model: Optional[torch.nn.Module] = None
 
-_pca_registry = {}
+# PCA 快取類別
+class PCACache:
+    def __init__(self, max_items: int = 15) -> None:
+        self.cache: OrderedDict[str, PCA] = OrderedDict()
+        self.max_items = max_items
+
+    def get(self, name: str) -> Optional[PCA]:
+        return self.cache.get(name)
+
+    def set(self, name: str, pca: PCA) -> None:
+        self.cache[name] = pca
+        self.cache.move_to_end(name)
+        if len(self.cache) > self.max_items:
+            evicted = self.cache.popitem(last=False)
+            logger.info(f"自動清除 PCA: {evicted[0]}")
+
+    def clear(self) -> None:
+        self.cache.clear()
+
+# 正式使用 PCACache
+_pca_registry = PCACache()
 
 @lru_cache(maxsize=3)
 def get_mel_transform(sr: int):
@@ -105,35 +140,26 @@ def get_pann_model():
 
 @lru_cache(maxsize=32)
 def get_optimal_chunk_size(file_size: int) -> float:
-    """根據檔案大小動態調整分塊大小"""
-    base_chunk_duration = 30.0
-    if file_size > 1024 * 1024 * 1024:  # 1GB
-        return 15.0  # 較小的分塊
-    elif file_size > 512 * 1024 * 1024:  # 512MB
+    base = 30.0
+    if file_size > 1<<30:
+        return 15.0
+    if file_size > 512<<20:
         return 30.0
-    else:
-        return 60.0  # 較大的分塊
-
+    return 60.0
+    
 # =============== 基本工具函數 ===============
-class PCACache:
-    def __init__(self, max_items: int = 15) -> None:
-        self.cache: OrderedDict[str, PCA] = OrderedDict()
-        self.max_items = max_items
+def chamfer_sim(a: np.ndarray, b: np.ndarray, top_k: int = 3) -> float:
+    """
+    a, b: shape = (n_chunk, dim)
+    回傳 0~1，相似度越高越接近 1
+    """
+    # 兩兩餘弦相似度矩陣
+    S = cosine_similarity(a, b)
 
-    def get(self, name: str) -> Optional[PCA]:
-        return self.cache.get(name)
-
-    def set(self, name: str, pca: PCA) -> None:
-        self.cache[name] = pca
-        self.cache.move_to_end(name)
-        if len(self.cache) > self.max_items:
-            evicted = self.cache.popitem(last=False)
-            logger.info(f"自動清除 PCA: {evicted[0]}")
-
-    def clear(self) -> None:
-        self.cache.clear()
-
-_pca_registry = PCACache()
+    # 每個 chunk 取「對方前 top_k」平均，再雙向平均
+    topA = np.mean(np.sort(S, axis=1)[:, -top_k:], axis=1)   # A→B
+    topB = np.mean(np.sort(S, axis=0)[-top_k:, :], axis=0)   # B→A
+    return float((topA.mean() + topB.mean()) / 2)
 
 def log_memory(stage: str)-> None:
     print(f"[{stage}] Memory: {psutil.Process(os.getpid()).memory_info().rss / 1024**2:.2f} MB")
@@ -288,8 +314,15 @@ def apply_pca(name: str, vector: np.ndarray, n_components: int) -> np.ndarray:
     return reduced.squeeze()
 
 def cos_sim(a: np.ndarray, b: np.ndarray) -> float:
-    """計算餘弦相似度，值域為 0 ~ 1"""
-    return (np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8) + 1) / 2
+    """計算餘弦相似度，若長度不一致，取最小長度進行對齊再計算"""
+    # 對齊長度
+    if a.ndim == 1 and b.ndim == 1:
+        min_len = min(a.shape[0], b.shape[0])
+        a = a[:min_len]
+        b = b[:min_len]
+    # 計算並映射到 [0,1]
+    cos = np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8)
+    return (cos + 1) / 2
 
 def dtw_sim(a: np.ndarray, b: np.ndarray, max_length: int = 500) -> float:
     """簡化的 DTW 相似度，較短樣本對齊比較用"""
@@ -304,62 +337,65 @@ def extract_dl_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[np
         y, sr = librosa.load(audio_path, sr=AUDIO_CONFIG['sample_rate'])
         mel_spec_transform = get_mel_transform(sr)
         chunk_size = int(chunk_sec * sr)
-        features = []
+        feats = []
+
         for i in range(0, len(y), chunk_size):
-            chunk = y[i:i+chunk_size]
-            if len(chunk) < sr: continue
-            try:
-                waveform = normalize_waveform(torch.tensor(chunk, dtype=torch.float32).unsqueeze(0).to(device))
-                with torch.no_grad():
-                    mel = mel_spec_transform(waveform)
-                    pooled = torch.mean(mel, dim=2).squeeze().cpu().numpy()
-                features.append(pooled)
-            except Exception as e:
-                print(f"DL chunk {i//chunk_size} failed: {e}")
+            chunk = y[i:i + chunk_size]
+            if len(chunk) < sr:
                 continue
-        if not features:
-            logger.warning(f"DL 特徵全部失敗: {audio_path}")
-        chunks = np.stack(features)
-        return np.concatenate([
-            np.mean(chunks, axis=0),
-            np.var(chunks, axis=0)
-        ]).astype(np.float32) if features else None
+            try:
+                wf = normalize_waveform(torch.tensor(chunk, dtype=torch.float32)
+                                        .unsqueeze(0).to(device))
+                with torch.no_grad():
+                    mel = mel_spec_transform(wf)           # (1, n_mels, n_frame)
+                    pooled = torch.mean(mel, dim=2).squeeze().cpu().numpy()
+                feats.append(pooled)                       # 128 維
+            except Exception as e:
+                logger.warning(f"[DL] chunk {i//chunk_size} failed: {e}")
+                continue
+
+        if not feats:
+            logger.warning(f"[DL] 全部 chunk 失敗: {audio_path}")
+            return None
+
+        return np.stack(feats).astype(np.float32)          # (n_chunk, 128)
     except Exception as e:
-        print(f"DL feature error: {e}")
+        logger.error(f"[DL] feature error: {e}")
         return None
 
 def extract_pann_features(audio_path: str, chunk_sec: float = 10.0) -> Optional[np.ndarray]:
     try:
         waveform, sr = torchaudio.load(audio_path)
-
         if sr != AUDIO_CONFIG['sample_rate']:
             waveform = torchaudio.transforms.Resample(sr, AUDIO_CONFIG['sample_rate'])(waveform)
             sr = AUDIO_CONFIG['sample_rate']
-            
-        model = get_pann_model()
 
+        model = get_pann_model()
         if model is None:
             logger.error("[PANN] 模型初始化失敗")
             return None
-        
+
         chunk_size = int(chunk_sec * sr)
-        chunks = [waveform[:, i:i+chunk_size] for i in range(0, waveform.shape[1], chunk_size) if waveform[:, i:i+chunk_size].shape[1] >= sr]
-        emb_list = []
-        tag_vec_sum = None
+        chunks = [waveform[:, i:i + chunk_size]
+                  for i in range(0, waveform.shape[1], chunk_size)
+                  if waveform[:, i:i + chunk_size].shape[1] >= sr]
+
+        feats = []
         for idx, c in enumerate(chunks):
-            with torch.no_grad():
-                out = model(c.to(device))
-                emb = out['embedding'].squeeze().cpu().numpy()
-                tags = out['clipwise_output'].squeeze().cpu().numpy()
-                emb_list.append(emb[:2048])
-                tag_vec_sum = tags if tag_vec_sum is None else tag_vec_sum + tags
-        if not emb_list:
-            logger.warning(f"[PANN] 沒有有效的chunk: {audio_path}")
+            try:
+                with torch.no_grad():
+                    out  = model(c.to(device))
+                    emb  = out['embedding'].squeeze().cpu().numpy()[:2048]      # 2048
+                    tags = out['clipwise_output'].squeeze().cpu().numpy()       # 527
+                feats.append(np.concatenate([emb, tags]))                       # 2575
+            except Exception as e:
+                logger.warning(f"[PANN] chunk {idx} failed: {e}")
+
+        if not feats:
+            logger.warning(f"[PANN] 沒有有效 chunk: {audio_path}")
             return None
-        emb_arr = np.stack(emb_list)
-        emb_mean = np.mean(emb_arr, axis=0)
-        tag_vec_mean = tag_vec_sum / len(emb_list)
-        return np.concatenate([emb_mean, tag_vec_mean]).astype(np.float32)
+
+        return np.stack(feats).astype(np.float32)         # (n_chunk, 2575)
     except Exception as e:
         logger.error(f"[PANN] 特徵提取失敗: {e}")
         return None
@@ -532,113 +568,91 @@ def compute_audio_features(audio_path: str, use_openl3: bool = True) -> Optional
     return features
 
 def compute_similarity(f1: Dict[str, Any], f2: Dict[str, Any]) -> float:
-    detailed_scores = {}
-    scores, weights = [], []
+    detailed, scores, weights = {}, [], []
 
+    # Onset
     if 'onset_env' in f1 and 'onset_env' in f2:
         dtw_score = dtw_sim(f1['onset_env'], f2['onset_env'])
-        weight = SIMILARITY_WEIGHTS.get('onset', 1.0)
-        scores.append(dtw_score)
-        weights.append(weight)
-        detailed_scores['onset_env'] = (dtw_score, weight)
+        scores.append(dtw_score); weights.append(SIMILARITY_WEIGHTS['onset_env'])
+        detailed['onset_env'] = (dtw_score, SIMILARITY_WEIGHTS['onset_env'])
 
+    # 統計特徵：mfcc, mfcc_delta, chroma
     for k in ['mfcc', 'mfcc_delta', 'chroma']:
         for stat in ['mean', 'std']:
             if k in f1 and k in f2 and stat in f1[k] and stat in f2[k]:
-                score = cos_sim(f1[k][stat], f2[k][stat])
-                scores.append(score)
-                weights.append(SIMILARITY_WEIGHTS.get(k, 1.0))
-                detailed_scores[f"{k}_{stat}"] = (score, SIMILARITY_WEIGHTS.get(k, 1.0))
+                raw = cos_sim(f1[k][stat], f2[k][stat])
+                sim = raw**2
+                weight = SIMILARITY_WEIGHTS.get(f"{k}_{stat}", SIMILARITY_WEIGHTS.get(k, 1.0))
+                scores.append(sim); weights.append(weight)
+                detailed[f"{k}_{stat}"] = (sim, weight)
 
+    # Tempo
     if 'tempo' in f1 and 'tempo' in f2:
-        t1 = f1['tempo']
-        t2 = f2['tempo']
-        tempo_sim = 1 / (1 + abs(t1['mean'] - t2['mean']) / 30)
-        std_sim = 1 / (1 + abs(t1['std'] - t2['std']) / 15)
-        range_sim = 1 / (1 + abs(t1['range'] - t2['range']) / 30)
-        combined_tempo_sim = 0.5 * tempo_sim + 0.25 * std_sim + 0.25 * range_sim
-        scores.append(combined_tempo_sim)
-        weights.append(SIMILARITY_WEIGHTS.get('tempo', 1.0))
+        t1, t2 = f1['tempo'], f2['tempo']
+        s1 = 1/(1+abs(t1['mean']-t2['mean'])/30)
+        s2 = 1/(1+abs(t1['std']-t2['std'])/15)
+        s3 = 1/(1+abs(t1['range']-t2['range'])/30)
+        sim = 0.5*s1+0.25*s2+0.25*s3
+        scores.append(sim); weights.append(SIMILARITY_WEIGHTS['tempo'])
+        detailed['tempo'] = (sim, SIMILARITY_WEIGHTS['tempo'])
 
-    # 加入 OpenL3 chunkwise DTW 比對（若有）
+     # 加入 OpenL3 chunkwise DTW 比對（若有）
     if 'openl3_features' in f1 and 'openl3_features' in f2:
         o1 = f1['openl3_features']
         o2 = f2['openl3_features']
         if isinstance(o1, dict) and 'chunkwise' in o1 and 'chunkwise' in o2:
             sim = chunkwise_dtw_sim(o1['chunkwise'], o2['chunkwise'])
             scores.append(sim)
-            weights.append(SIMILARITY_WEIGHTS.get('openl3_features', 1.0))
-            detailed_scores['openl3_chunkwise'] = (sim, SIMILARITY_WEIGHTS.get('openl3_chunkwise', 1.0))
-            logger.info(f'OpenL3 chunkwise DTW 相似度: {sim:.4f}')
+            weights.append(SIMILARITY_WEIGHTS.get('openl3_chunkwise', 1.0))
+            detailed['openl3_chunkwise'] = (sim, SIMILARITY_WEIGHTS.get('openl3_chunkwise', 1.0))
 
+    # PANN & OpenL3
     for k in ['dl_features', 'pann_features', 'openl3_features']:
-        v1 = f1.get(k)
-        v2 = f2.get(k)
-
-        logger.info(f"比對特徵 {k}:")
-        logger.info(f"v1 type: {type(v1)}, shape: {getattr(v1, 'shape', None) if not isinstance(v1, dict) else 'dict'}")
-        logger.info(f"v2 type: {type(v2)}, shape: {getattr(v2, 'shape', None) if not isinstance(v2, dict) else 'dict'}")
-
-        if v1 is None or v2 is None:
-            logger.warning(f"特徵 {k} 為 None，跳過")
-            continue
-
+        v1, v2 = f1.get(k), f2.get(k)
+        if v1 is None or v2 is None: continue
         try:
-            if k == 'pann_features' and isinstance(v1, np.ndarray) and v1.size == v2.size:
+            # OpenL3 chunkwise first
+            if k == 'openl3_features':
+                if isinstance(v1, dict):
+                    if 'chunkwise' in v1 and 'chunkwise' in v2:
+                        sim_chunk = chunkwise_dtw_sim(v1['chunkwise'], v2['chunkwise'])
+                        scores.append(sim_chunk)
+                        weights.append(SIMILARITY_WEIGHTS.get('openl3_chunkwise', 1.0))
+                        detailed['openl3_chunkwise'] = (sim_chunk, SIMILARITY_WEIGHTS.get('openl3_chunkwise', 1.0))
+                    if 'merged' in v1 and 'merged' in v2:
+                        sim_merged = cos_sim(v1['merged'], v2['merged'])
+                        scores.append(sim_merged)
+                        weights.append(SIMILARITY_WEIGHTS.get('openl3_features', 1.0))
+                        detailed['openl3_features'] = (sim_merged, SIMILARITY_WEIGHTS.get('openl3_features', 1.0))
+                    continue
+
+            # 2D arrays via Chamfer
+            if isinstance(v1, np.ndarray) and v1.ndim==2 and isinstance(v2, np.ndarray) and v2.ndim==2:
+                sim = chamfer_sim(v1, v2, top_k=3)
+            elif k=='pann_features':
                 split = 2048
                 emb1, tag1 = v1[:split], v1[split:]
                 emb2, tag2 = v2[:split], v2[split:]
-
-                # 1. Embedding 相似度（不做 PCA，直接算 cosine）
-                sim1 = cos_sim(emb1, emb2)
-
-                # 2. 標籤相似度（連續化 cosine，而非二值 Jaccard）
-                tag_sim = cos_sim(tag1, tag2)
-
-                # 3. 權重組合
-                sim = 0.6 * sim1 + 0.4 * tag_sim
-                logger.info(f"[PANN] emb_sim: {sim1:.4f}, tag_sim: {tag_sim:.4f}, combined: {sim:.4f}")
-
-            elif k == 'openl3_features' and isinstance(v1, dict) and isinstance(v2, dict):
-                if 'merged' in v1 and 'merged' in v2:
+                sim = 0.6*cos_sim(emb1, emb2) + 0.4*cos_sim(tag1, tag2)
+            else:
+                # OpenL3 merged fallback
+                if isinstance(v1, dict) and 'merged' in v1 and 'merged' in v2:
                     sim = cos_sim(v1['merged'], v2['merged'])
                 else:
-                    logger.warning(f"openl3_features 缺少 merged 向量，跳過")
-                    continue
-            else:
-                if isinstance(v1, np.ndarray) and v1.ndim == 2:
-                    v1 = np.mean(v1, axis=0)
-                if isinstance(v2, np.ndarray) and v2.ndim == 2:
-                    v2 = np.mean(v2, axis=0)
-                if not is_valid_vector(v1) or not is_valid_vector(v2):
-                    logger.warning(f"特徵格式不合法: {k}")
-                    continue
-                sim = cos_sim(v1, v2)
-
+                    sim = cos_sim(v1.flatten(), v2.flatten())
             weight = SIMILARITY_WEIGHTS.get(k, 1.0)
-            scores.append(sim)
-            weights.append(weight)
-            detailed_scores[k] = (sim, weight)
-            logger.info(f"成功比對 {k}，相似度: {sim:.4f}，權重: {weight}")
-
+            scores.append(sim); weights.append(weight)
+            detailed[k] = (sim, weight)
         except Exception as e:
-            logger.error(f"比對 {k} 發生錯誤: {e}")
+            logger.warning(f"比對 {k} 發生錯誤: {e}")
 
     if not scores:
         logger.error("所有相似度評估皆失敗，無法進行加權")
         return 0.0
 
-    if len(scores) != len(weights):
-        logger.error(f"相似度與權重長度不一致: scores={len(scores)}, weights={len(weights)}")
-        logger.error(f"scores={scores}")
-        logger.error(f"weights={weights}")
-        return 0.0
-
-    final_score = float(np.average(scores, weights=weights))
-    logger.info("特徵比對詳情：")
-    for name, (score, weight) in detailed_scores.items():
-        logger.info(f"  {name:20s} | 相似度: {score:.4f} | 權重: {weight}")
-    return final_score
+    final = float(np.average(scores, weights=weights))
+    for name,(s,w) in detailed.items(): logger.info(f"  {name:20s} | 相似度: {s:.4f} | 權重: {w}") 
+    return final
 
 def audio_similarity(path1: str, path2: str) -> float:
     log_memory("開始")
