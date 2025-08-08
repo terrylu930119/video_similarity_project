@@ -22,7 +22,11 @@ torchopenl3>=0.4.2
 
 # 機器學習與數據處理
 scikit-learn>=1.0.0
-fastdtw>=0.3.4 
+fastdtw>=0.3.4
+scipy>=1.7.0
+
+# 超參數優化（訓練用）
+optuna>=3.0.0 
 
 # PyTorch 相關依賴（使用 CUDA 12.1）
 --find-links https://download.pytorch.org/whl/cu121
@@ -35,3 +39,7 @@ torchlibrosa>=0.0.9
 huggingface-hub>=0.16.4
 sentence-transformers>=2.2.2
 faster-whisper>=1.1.1
+
+# API 路由
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0

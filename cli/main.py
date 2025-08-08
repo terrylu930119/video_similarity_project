@@ -1,23 +1,35 @@
 import os
 import sys
+import json
 import signal
 import shutil
 import argparse
 import traceback
 import multiprocessing
+from pathlib import Path
 from utils.logger import logger
 from utils.downloader import download_video
 from core.audio_processor import extract_audio
-from typing import Union, Dict, List, Callable
+from typing import Union, Dict, List, Optional
 from core.text_processor import transcribe_audio
 from concurrent.futures import ThreadPoolExecutor
 from utils.video_utils import extract_frames, get_video_info
 from core.similarity import calculate_overall_similarity, display_similarity_results
 
+BASE_DIR = Path(__file__).resolve().parents[1]  # 專案根目錄
+
+DOWNLOADS_DIR = BASE_DIR / "downloads"
+CACHE_DIR = BASE_DIR / "feature_cache"
+
+os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
+
 # ================ 全域變量與清理控制 ================
 _cleanup_in_progress = False
 
 # ================ 類別定義：影片處理器 ================
+
+
 class VideoProcessor:
     """
     影片處理器：負責下載影片、提取音訊與幀，並將處理結果緩存以利重複使用。
@@ -26,11 +38,12 @@ class VideoProcessor:
         time_interval (Union[float, str]): 抽幀時間間隔，或設定為 "auto" 由系統自動決定。
         processed (Dict[str, dict]): 已處理影片的緩存結果。
     """
+
     def __init__(self, output_dir: str, time_interval: Union[float, str]) -> None:
         """初始化影片處理器實例。"""
         self.output_dir: str = output_dir
         self.time_interval: Union[float, str] = time_interval
-        self.processed: Dict[str, dict] = {}  
+        self.processed: Dict[str, dict] = {}
 
     def _decide_interval(self, duration: float) -> float:
         """
@@ -49,7 +62,7 @@ class VideoProcessor:
         else:
             return 3.0          # 長片：3.0 秒/幀
 
-    def download_and_process(self, link: str) -> dict:
+    def download_and_process(self, link: str, preferred_lang: Optional[str] = None) -> dict:
         """
         下載並處理指定影片，若已處理則直接回傳緩存結果。
         Args:
@@ -62,12 +75,13 @@ class VideoProcessor:
             return self.processed[link]
 
         logger.info(f"下載與處理影片: {link}")
-        video_path: str = download_video(link, self.output_dir)
-        data: dict = self._process_video(video_path, link)
+        video_path = download_video(link, self.output_dir)
+        data = self._process_video(video_path, link, preferred_lang)
         self.processed[link] = data
+
         return data
-    
-    def _process_video(self, video_path: str, video_url: str) -> dict:
+
+    def _process_video(self, video_path: str, video_url: str, preferred_lang: Optional[str] = None) -> dict:
         """
         處理本地影片檔案：
           1. 檢查影片檔案存在
@@ -95,7 +109,11 @@ class VideoProcessor:
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"音訊不存在: {audio_path}")
 
-        transcript: str = transcribe_audio(audio_path, video_url, self.output_dir) or ""
+        transcript, lang = "", None
+        try:
+            transcript, lang = transcribe_audio(audio_path, video_url, self.output_dir, preferred_lang)
+        except Exception as e:
+            logger.error(f"轉錄失敗: {e}")
 
         frames_dir: str = os.path.join(
             self.output_dir,
@@ -121,10 +139,13 @@ class VideoProcessor:
             "audio_path": audio_path,
             "transcript": transcript,
             "frames": valid_frames,
-            "duration": duration
+            "duration": duration,
+            "lang": lang,
         }
 
 # ================ 清理工具 ================
+
+
 def cleanup_files(path: str) -> None:
     """
     刪除指定目錄及其所有子檔案。
@@ -141,6 +162,8 @@ def cleanup_files(path: str) -> None:
             logger.error(f"清理失敗: {str(e)}")
 
 # ================ 訊號處理器 ================
+
+
 def signal_handler(signum: int, frame) -> None:
     """
     處理中斷訊號，先進行檔案清理再結束程式。
@@ -156,12 +179,15 @@ def signal_handler(signum: int, frame) -> None:
     _cleanup_in_progress = False
     sys.exit(1)
 
+
 def setup_signal_handlers() -> None:
     """註冊 SIGINT 與 SIGTERM 的處理器。"""
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
 # ================ 主流程 ================
+
+
 def main():
     """
     主流程：
@@ -174,8 +200,8 @@ def main():
     parser: argparse.ArgumentParser = argparse.ArgumentParser(description="影片比對系統")
     parser.add_argument("--ref", required=True, help="參考影片連結")
     parser.add_argument("--comp", nargs='+', required=True, help="比對影片連結")
-    parser.add_argument("--output", default="downloads", help="輸出資料夾")
-    parser.add_argument("--cache", default="feature_cache", help="快取資料夾")
+    parser.add_argument("--output", default=str(DOWNLOADS_DIR), help="輸出資料夾")
+    parser.add_argument("--cache", default=str(CACHE_DIR), help="快取資料夾")
     parser.add_argument("--interval", default="auto", help="幀提取時間間隔（秒），可設為 auto 表示自動決定")
     parser.add_argument("--keep", action="store_true", help="是否保留中間檔案")
 
@@ -185,8 +211,8 @@ def main():
             '--ref', '',
             '--comp', '',
             '--interval', 'auto',
-            '--output', 'downloads',
-            '--cache', 'feature_cache',
+            '--output', str(DOWNLOADS_DIR),
+            '--cache', str(CACHE_DIR),
             '--keep'
         ])
     else:
@@ -198,12 +224,13 @@ def main():
 
         processor: VideoProcessor = VideoProcessor(args.output, args.interval)
         ref_data: dict = processor.download_and_process(args.ref)           # 處理參考影片
+        ref_lang = ref_data["lang"]
         comparison_results: List[dict] = []                                 # 併發處理比對影片並計算相似度
 
         def process_and_compare(link: str) -> None:
             """內部函式：下載、處理並計算與參考影片的相似度"""
             try:
-                comp_data: dict = processor.download_and_process(link)
+                comp_data: dict = processor.download_and_process(link, preferred_lang=ref_lang)
                 required_paths: List[str] = (
                     [ref_data["audio_path"], comp_data["audio_path"]]
                     + ref_data["frames"] + comp_data["frames"]
@@ -228,6 +255,7 @@ def main():
             executor.map(process_and_compare, args.comp)
 
         display_similarity_results(args.ref, comparison_results)
+        print(json.dumps(comparison_results, ensure_ascii=False))
 
         if not args.keep:
             logger.info("自動清理中...")
@@ -240,6 +268,7 @@ def main():
         cleanup_files(args.output)
         cleanup_files(args.cache)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

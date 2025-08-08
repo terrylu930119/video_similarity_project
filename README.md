@@ -41,27 +41,49 @@ Video Similarity Project 是一個多模態的影片相似度比對系統，整�
 
 ```
 video_similarity_project/
-├─ core/               # 核心處理模組
-│   ├─ audio_processor.py      # 音頻特徵提取與相似度計算
+├─ core/               # 多模態分析核心模組（音訊、影像、文字、相似度融合）
+│   ├─ audio_processor.py      # 音訊特徵提取與相似度計算
 │   ├─ image_processor.py      # 圖像特徵提取與相似度計算
 │   ├─ text_processor.py       # 語音轉錄與文字相似度計算
-│   └─ similarity.py           # 多模態相似度融合與結果輸出
-├─ utils/              # 實用工具模組
+│   ├─ similarity.py           # 多模態相似度融合與結果輸出
+│   └─ __init__.py
+├─ utils/              # 實用工具模組（下載、幀處理、日誌、依賴檢查、GPU 管理等）
 │   ├─ downloader.py           # 影片下載與命名工具
 │   ├─ video_utils.py          # 幀提取、影片資訊獲取
-│   ├─ audio_cleaner.py        # 音訊過濾（如降噪、靜音偵測）*(若存在)*
+│   ├─ audio_cleaner.py        # 音訊過濾（如降噪、靜音偵測）
 │   ├─ gpu_utils.py            # GPU 記憶體管理工具
 │   ├─ logger.py               # 日誌紀錄設定
-│   └─ dependencies.py         # 執行環境依賴檢查
-├─ panns_inference/     # 第三方預訓練模型相關程式 (PANN 音訊模型)
-│   ├─ inference.py            # 簡易推理介面
-│   ├─ models.py               # 模型架構定義 (CNN14 等)
-│   ├─ pytorch_utils.py        # PANN 模型所需的 PyTorch 工具
-│   └─ config.py               # PANN 模組配置
-├─ downloads/          # *執行後產生:* 影片與幀暫存資料夾（可自定義路徑）
-├─ feature_cache/      # *執行後產生:* 音訊特徵快取資料夾（可自定義路徑）
-├─ requirements.txt    # Python 相依套件清單
-└─ README.md           # 說明文件 (本檔案)
+│   ├─ dependencies.py         # 執行環境依賴檢查
+│   └─ __init__.py
+├─ panns_inference/     # PANN 音訊深度模型推理與工具
+│   ├─ inference.py            # 推理介面
+│   ├─ models.py               # 模型架構定義
+│   ├─ pytorch_utils.py        # PyTorch 工具
+│   ├─ config.py               # 模組配置
+│   ├─ metadata/               # 模型相關資料
+│   └─ __init__.py
+├─ training/            # 特徵權重訓練腳本與資料
+│   ├─ audioFeatureWeightTraining.py
+│   └─ video_dataset.csv
+├─ downloads/           # *執行後產生:* 影片、音訊、字幕、幀等暫存資料夾
+│   ├─ audio/                   # 音訊暫存
+│   ├─ frames/                  # 影片幀暫存
+│   └─ ...（各種 .mp4, .wav, .json, .txt）
+├─ feature_cache/       # *執行後產生:* 音訊特徵快取
+├─ logs/                # *執行後產生:* 日誌檔案
+├─ optimization_data/   # 優化分析資料夾（特徵、影片、優化結果等）
+│   ├─ features/
+│   ├─ videos/
+│   ├─ audio/
+│   └─ results/
+├─ main.py              # 命令列主程式入口
+├─ compare_api.py       # API 介面
+├─ start_project.py     # 初始化腳本
+├─ index.html           # 前端頁面（如有）
+├─ requirements.txt     # Python 相依套件清單
+├─ README.md            # 說明文件 (本檔案)
+├─ .gitignore
+└─ www.youtube.com_cookies.txt  # 下載器 cookies（如有需求）
 ```
 
 ## 安裝與環境需求

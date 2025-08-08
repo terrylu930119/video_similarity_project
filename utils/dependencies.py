@@ -10,10 +10,14 @@ _checked_yt_dlp: bool = False
 _checked_cuda: bool = False
 
 # =============== 安裝需求 ===============
+
+
 def install_requirements() -> None:
     os.system("pip install -r requirements.txt")
 
 # =============== 套件可用性檢查 ===============
+
+
 def check_ffmpeg() -> bool:
     global _checked_ffmpeg
     if _checked_ffmpeg:
@@ -28,6 +32,7 @@ def check_ffmpeg() -> bool:
         logger.error("請安裝 ffmpeg：https://ffmpeg.org/download.html")
         return False
 
+
 def check_yt_dlp() -> bool:
     global _checked_yt_dlp
     if _checked_yt_dlp:
@@ -41,6 +46,7 @@ def check_yt_dlp() -> bool:
     except subprocess.CalledProcessError:
         logger.error("請安裝 yt-dlp：pip install yt-dlp")
         return False
+
 
 def check_cuda() -> bool:
     global _checked_cuda
@@ -59,6 +65,7 @@ def check_cuda() -> bool:
         _checked_cuda = True
         return False
 
+
 def check_gpu_dependencies() -> bool:
     """檢查 GPU 相關相依套件狀態"""
     logger.info(f"PyTorch 版本: {torch.__version__}")
@@ -73,6 +80,7 @@ def check_gpu_dependencies() -> bool:
         logger.warning("CUDA：https://developer.nvidia.com/cuda-downloads")
         logger.warning("cuDNN：https://developer.nvidia.com/cudnn")
         return False
+
 
 if __name__ == "__main__":
     # install_requirements()

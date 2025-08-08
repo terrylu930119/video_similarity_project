@@ -7,6 +7,8 @@ from utils.logger import logger
 from typing import List, Tuple, Union
 
 # =============== 基礎工具：影片檔案檢查 ===============
+
+
 def check_video_file(video_path: str) -> bool:
     """檢查影片檔案是否存在且可以打開"""
     if not os.path.exists(video_path):
@@ -22,6 +24,8 @@ def check_video_file(video_path: str) -> bool:
     return True
 
 # =============== 幀儲存與處理 ===============
+
+
 def save_frame(frame_data: Tuple[np.ndarray, str]) -> str:
     """
     保存單個幀
@@ -41,6 +45,8 @@ def save_frame(frame_data: Tuple[np.ndarray, str]) -> str:
         return ""
 
 # =============== 幀提取（含快取與 GPU 支援） ===============
+
+
 def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0) -> List[str]:
     try:
         if not check_video_file(video_path):
@@ -58,7 +64,8 @@ def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0)
         ])
 
         if existing_frames:
-            valid_frames: List[str] = [f for f in existing_frames if os.path.exists(f) and os.path.getsize(f) > 0]
+            valid_frames: List[str] = [
+                f for f in existing_frames if os.path.exists(f) and os.path.getsize(f) > 0]
             if valid_frames:
                 logger.info(f"使用現有的 {len(valid_frames)} 個幀文件")
                 return valid_frames
@@ -113,8 +120,10 @@ def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0)
     except Exception as e:
         logger.error(f"提取幀時出錯: {str(e)}")
         return []
-    
+
 # =============== 影片基本資訊擷取 ===============
+
+
 def get_video_info(video_path: str) -> Tuple[int, int, int, float]:
     if not check_video_file(video_path):
         return 0, 0, 0, 0.0
@@ -135,16 +144,22 @@ def get_video_info(video_path: str) -> Tuple[int, int, int, float]:
         cap.release()
 
 # =============== 幀尺寸調整 ===============
+
+
 def resize_frame(frame: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
     return cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
 
 # =============== 幀預處理（灰階 + 模糊） ===============
+
+
 def preprocess_frame(frame: np.ndarray) -> np.ndarray:
     gray: np.ndarray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred: np.ndarray = cv2.GaussianBlur(gray, (5, 5), 0)
     return blurred
 
 # =============== 關鍵幀擷取邏輯 ===============
+
+
 def extract_keyframes(video_path: str, output_dir: str, threshold: float = 30.0) -> List[str]:
     if not check_video_file(video_path):
         return []

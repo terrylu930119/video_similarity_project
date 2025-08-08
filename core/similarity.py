@@ -6,6 +6,8 @@ from core.audio_processor import audio_similarity
 from core.image_processor import video_similarity
 from typing import List, Dict, Union, Optional, TypedDict
 # ======================== 結果輸出需求欄位 ========================
+
+
 class SimilarityResult(TypedDict):
     link: str
     audio_similarity: float
@@ -16,6 +18,8 @@ class SimilarityResult(TypedDict):
     text_status: Optional[str]
 
 # ======================== 檔案驗證與前處理 ========================
+
+
 def check_files_exist(files: Union[str, List[str]], check_size: bool = True) -> bool:
     """
     檢查文件是否存在且有效
@@ -58,6 +62,7 @@ def check_files_exist(files: Union[str, List[str]], check_size: bool = True) -> 
 
     return True
 
+
 def get_video_id_from_path(file_path: str) -> str:
     """從文件路徑中提取影片ID（包含播放清單索引）"""
     basename: str = os.path.basename(file_path)
@@ -67,21 +72,24 @@ def get_video_id_from_path(file_path: str) -> str:
         return basename.split('_transcript')[0]
     else:  # 影片或音頻文件
         return os.path.splitext(basename)[0]
-    
+
 # ======================== 相似度計算主流程 ========================
-def calculate_overall_similarity(audio1: str, audio2: str, image1: Union[str, List[str]], image2: Union[str, List[str]],
-                                 text1: str, text2: str,video_duration: float,weights: Optional[Dict[str, float]] = None
+
+
+def calculate_overall_similarity(audio1: str, audio2: str, image1: Union[str, List[str]],
+                                 image2: Union[str, List[str]], text1: str, text2: str,
+                                 video_duration: float, weights: Optional[Dict[str, float]] = None
                                  ) -> Dict[str, Union[float, bool, str, Dict[str, float]]]:
     """
     計算整體相似度
-    
+
     參數:
         audio1, audio2: 音訊文件路徑
         image1, image2: 圖像文件路徑或幀列表
         text1, text2: 文本內容
         video_duration: 視頻時長（秒）
         weights: 各部分的權重
-    
+
     返回:
         包含各部分相似度和整體相似度的字典
     """
@@ -94,7 +102,8 @@ def calculate_overall_similarity(audio1: str, audio2: str, image1: Union[str, Li
     audio1 = os.path.abspath(os.path.normpath(audio1))
     audio2 = os.path.abspath(os.path.normpath(audio2))
 
-    audio_files_valid: bool = check_files_exist([audio1, audio2], check_size=True)
+    audio_files_valid: bool = check_files_exist(
+        [audio1, audio2], check_size=True)
     if not audio_files_valid:
         logger.error("音頻文件無效，跳過音頻相似度計算")
         logger.error(f"音頻文件1: {audio1}")
@@ -131,9 +140,11 @@ def calculate_overall_similarity(audio1: str, audio2: str, image1: Union[str, Li
         i_sim: float = 0.0
     else:
         try:
-            logger.info(f"開始計算圖像相似度: {len(image1_paths)} 和 {len(image2_paths)} 幀")
+            logger.info(
+                f"開始計算圖像相似度: {len(image1_paths)} 和 {len(image2_paths)} 幀")
             batch_size: int = 64 if gpu_available else 32
-            i_sim_result: Dict[str, float] = video_similarity(image1_paths, image2_paths, video_duration, batch_size)
+            i_sim_result: Dict[str, float] = video_similarity(
+                image1_paths, image2_paths, video_duration, batch_size)
             i_sim = i_sim_result["similarity"]
             logger.info(f"圖像相似度: {i_sim:.3f}")
         except Exception as e:
@@ -153,22 +164,25 @@ def calculate_overall_similarity(audio1: str, audio2: str, image1: Union[str, Li
             # 將文本權重重新分配給音訊和畫面
             text_weight = weights['text']
             total_remaining_weight = weights['audio'] + weights['image']
-            
+
             if total_remaining_weight > 0:
                 # 按比例重新分配文本權重
-                audio_weight = weights['audio'] + (text_weight * weights['audio'] / total_remaining_weight)
-                image_weight = weights['image'] + (text_weight * weights['image'] / total_remaining_weight)
+                audio_weight = weights['audio'] + \
+                    (text_weight * weights['audio'] / total_remaining_weight)
+                image_weight = weights['image'] + \
+                    (text_weight * weights['image'] / total_remaining_weight)
             else:
                 # 如果音訊和畫面權重都為0，平均分配
                 audio_weight = text_weight / 2
                 image_weight = text_weight / 2
-            
+
             weights = {
                 'audio': audio_weight,
                 'image': image_weight,
                 'text': 0.0
             }
-            logger.info(f"權重重新分配: 音訊={audio_weight:.3f}, 畫面={image_weight:.3f}, 文本=0.0")
+            logger.info(
+                f"權重重新分配: 音訊={audio_weight:.3f}, 畫面={image_weight:.3f}, 文本=0.0")
         else:
             weights = weights.copy()
 
@@ -201,6 +215,8 @@ def calculate_overall_similarity(audio1: str, audio2: str, image1: Union[str, Li
     }
 
 # ======================== 結果輸出與顯示 ========================
+
+
 def display_similarity_results(reference_link: str, comparison_results: List[SimilarityResult]) -> None:
     """
     顯示相似度比對結果
@@ -210,14 +226,16 @@ def display_similarity_results(reference_link: str, comparison_results: List[Sim
         comparison_results: 包含比對結果的列表，每個結果包含 link 和相似度分數
     """
     print("\n=== 相似度比對結果 ===")
-    print(f"參考影片: {reference_link[:60] + '...' if len(reference_link) > 63 else reference_link}\n")
+    print(
+        f"參考影片: {reference_link[:60] + '...' if len(reference_link) > 63 else reference_link}\n")
     print("比對結果:")
     print("-" * 122)
     print(f"{'影片連結':<62} {'音訊相似度':>8} {'畫面相似度':>8} {'內容相似度':>8} {'綜合相似度':>8}")
     print("-" * 122)
 
     for result in comparison_results:
-        link_display = result['link'][:60] + '...' if len(result['link']) > 63 else result['link']
+        link_display = result['link'][:60] + \
+            '...' if len(result['link']) > 63 else result['link']
 
         text_sim_display = f"{result['text_similarity']:>14.3f}"
         if result.get('text_meaningful') is False:

@@ -7,7 +7,10 @@ from pydub import AudioSegment, silence
 import torchaudio.transforms as transform
 
 # =============== 靜音修剪工具 ===============
-def trim_silence_pydub(waveform: torch.Tensor, sr: int, min_silence_len: int = 300, silence_thresh_db: int = -40) -> torch.Tensor:
+
+
+def trim_silence_pydub(waveform: torch.Tensor, sr: int, min_silence_len: int = 300,
+                       silence_thresh_db: int = -40) -> torch.Tensor:
     """
     使用 pydub 根據靜音切割音訊並合併語音段，避免語句開頭/結尾被剪掉。
     """
@@ -34,8 +37,11 @@ def trim_silence_pydub(waveform: torch.Tensor, sr: int, min_silence_len: int = 3
     return torch.tensor(cleaned).unsqueeze(0)
 
 # =============== 音訊清理流程 ===============
-def load_and_clean_audio(audio_path: str, output_path: Optional[str] = None, sample_rate: int = 16000, use_silence_detection: bool = False,
-                         min_silence_len: int = 300,silence_thresh_db: int = -40) -> str:
+
+
+def load_and_clean_audio(audio_path: str, output_path: Optional[str] = None,
+                         sample_rate: int = 16000, use_silence_detection: bool = False,
+                         min_silence_len: int = 300, silence_thresh_db: int = -40) -> str:
     """
     清理音訊並轉為 Whisper 最佳格式：單聲道、指定取樣率、正規化音量、去除靜音。
     """

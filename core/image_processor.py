@@ -21,6 +21,8 @@ _model_loaded: bool = False
 _feature_cache: dict[str, np.ndarray] = {}
 
 # =============== 特徵擷取：感知哈希（pHash） ===============
+
+
 @lru_cache(maxsize=1024)
 def compute_phash(image_path: str) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """計算灰度、邊緣與顏色三種特徵的感知哈希"""
@@ -75,6 +77,8 @@ def compute_phash(image_path: str) -> Optional[Tuple[np.ndarray, np.ndarray, np.
         return None
 
 # =============== 特徵擷取：深度模型（MobileNetV3） ===============
+
+
 def get_image_model():
     """載入 MobileNetV3-Large 模型與前處理流程"""
     global _image_model, _transform, _model_loaded
@@ -103,6 +107,7 @@ def get_image_model():
             raise
     return _image_model, _transform
 
+
 def compute_batch_embeddings(image_paths: List[str], batch_size: int = 64) -> Optional[np.ndarray]:
     """批次計算圖像深度嵌入向量"""
     try:
@@ -128,7 +133,8 @@ def compute_batch_embeddings(image_paths: List[str], batch_size: int = 64) -> Op
         if batch_tensors:
             for i in range(0, len(batch_tensors), batch_size):
                 batch = torch.stack(batch_tensors[i:i + batch_size])
-                batch = batch.to(gpu_manager.get_device()) if gpu_manager.get_device().type == "cuda" else batch
+                batch = batch.to(
+                    gpu_manager.get_device()) if gpu_manager.get_device().type == "cuda" else batch
                 with torch.no_grad():
                     features = model(batch).cpu()
                 for j, f in enumerate(features):
@@ -145,6 +151,8 @@ def compute_batch_embeddings(image_paths: List[str], batch_size: int = 64) -> Op
         return None
 
 # =============== 特徵比對邏輯 ===============
+
+
 def fast_similarity(feat1: Tuple[np.ndarray, np.ndarray, np.ndarray],
                     feat2: Tuple[np.ndarray, np.ndarray, np.ndarray]) -> float:
     """快速比對 pHash 特徵的綜合相似度"""
@@ -155,12 +163,13 @@ def fast_similarity(feat1: Tuple[np.ndarray, np.ndarray, np.ndarray],
         return gray_sim * 0.5 + edge_sim * 0.3 + hsv_sim * 0.2
     return 0
 
-def dtw_similarity(emb_seq1: np.ndarray,
-                   emb_seq2: np.ndarray) -> float:
+
+def dtw_similarity(emb_seq1: np.ndarray, emb_seq2: np.ndarray) -> float:
     """使用 fastdtw 計算兩段嵌入序列的相似度 (0~1)"""
     distance, _ = fastdtw(emb_seq1, emb_seq2, dist=cosine)
     sim = 1.0 / (1.0 + distance / max(len(emb_seq1), len(emb_seq2)))
     return sim
+
 
 def quick_ssim_check(img1_path: str, img2_path: str, thresh: float = 0.93) -> bool:
     """快速結構相似度檢查（灰度）"""
@@ -178,7 +187,11 @@ def quick_ssim_check(img1_path: str, img2_path: str, thresh: float = 0.93) -> bo
     except Exception as e:
         logger.error(f"SSIM 快速檢查錯誤 : {e}")
         return False
+
+
 # =============== 影片相似度比對主流程 ===============
+
+
 def video_similarity(frames1: List[str], frames2: List[str],
                      video_duration: float,
                      batch_size: int = 64) -> Dict[str, float]:
@@ -252,7 +265,7 @@ def video_similarity(frames1: List[str], frames2: List[str],
 
         if e1 is None or e2 is None:
             return {"similarity": 0.0}
-        
+
         e1 /= np.linalg.norm(e1, axis=1, keepdims=True) + 1e-8
         e2 /= np.linalg.norm(e2, axis=1, keepdims=True) + 1e-8
 

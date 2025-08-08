@@ -1,0 +1,15 @@
+{
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.autopep8",
+        "editor.formatOnSave": true
+    },
+    "autopep8.path": [
+        ".venv/Scripts/autopep8.exe"
+    ],
+    "autopep8.args": [
+        "--max-line-length",
+        "120",
+        "--aggressive",
+        "--aggressive"
+    ]
+}

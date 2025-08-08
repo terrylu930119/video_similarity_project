@@ -11,6 +11,8 @@ from typing import Dict
 _pann_weight_checked = False
 
 # =============== URL 檢查與命名工具 ===============
+
+
 def is_valid_url(url: str) -> bool:
     try:
         result = urllib.parse.urlparse(url)
@@ -18,10 +20,12 @@ def is_valid_url(url: str) -> bool:
     except Exception:
         return False
 
+
 def generate_safe_filename(url: str) -> str:
     url_hash: str = hashlib.md5(url.encode('utf-8')).hexdigest()
     parsed_url = urllib.parse.urlparse(url)
-    path_parts: list[str] = [p for p in parsed_url.path.strip('/').split('/') if p]
+    path_parts: list[str] = [
+        p for p in parsed_url.path.strip('/').split('/') if p]
 
     meaningful_part: str = ""
     for part in reversed(path_parts):
@@ -36,6 +40,8 @@ def generate_safe_filename(url: str) -> str:
         return url_hash
 
 # =============== 影片下載主函式 ===============
+
+
 def download_video(url: str, output_dir: str, resolution: str = "720p", max_retries: int = 3) -> str:
     if not is_valid_url(url):
         raise ValueError(f"無效的 URL: {url}")
@@ -52,7 +58,8 @@ def download_video(url: str, output_dir: str, resolution: str = "720p", max_retr
 
     output_path: str = os.path.join(output_dir, f"{safe_filename}.mp4")
     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-        logger.info(f"影片已存在且大小正常 ({os.path.getsize(output_path)} bytes): {output_path}")
+        logger.info(
+            f"影片已存在且大小正常 ({os.path.getsize(output_path)} bytes): {output_path}")
         return output_path
     elif os.path.exists(output_path):
         logger.warning(f"發現空檔案，將重新下載: {output_path}")
@@ -61,6 +68,7 @@ def download_video(url: str, output_dir: str, resolution: str = "720p", max_retr
     ydl_opts: Dict[str, object] = {
         'format': f'bestvideo[height<={resolution[:-1]}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={resolution[:-1]}]+bestaudio/best[height<={resolution[:-1]}]/best',
         'outtmpl': output_path,
+        'cookiefile': 'www.youtube.com_cookies.txt',
         'quiet': False,
         'no_warnings': True,
         'retries': max_retries,
@@ -105,6 +113,7 @@ def download_video(url: str, output_dir: str, resolution: str = "720p", max_retr
         if os.path.exists(output_path):
             os.remove(output_path)
         raise
+
 
 def ensure_pann_weights(expected_size: int = 340_000_000) -> Path:
     """
