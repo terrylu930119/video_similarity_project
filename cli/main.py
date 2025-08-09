@@ -194,7 +194,7 @@ def main():
         # 定義 ref/targets 任務 id
         ref_task_id = f"ref-{sha10(args.ref)}"
         targets: List[Dict[str, str]] = [{"url": link, "task_id": sha10(
-            link)} for link in args.comp if link and link != args.ref]
+            link)} for link in args.comp]
 
         # 先把任務公告出去（方便前端立刻建卡）
         emit("hello", ref={"task_id": ref_task_id, "url": args.ref}, targets=targets)

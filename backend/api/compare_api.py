@@ -15,6 +15,7 @@ class CompareReq(BaseModel):
     comp: List[str]
     interval: str = "auto"
     keep: bool = False
+    allow_self: bool = False
 
 
 class StatusReq(BaseModel):

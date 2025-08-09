@@ -1,0 +1,347 @@
+/* ========== Reset & Base ========== */
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    background: #0a0d11;
+    color: #e7ecf4;
+    font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "PingFang TC", "Noto Sans TC", Segoe UI, Roboto, Helvetica, Arial;
+    overflow-x: hidden;
+}
+
+/* ========== Layout ========== */
+.container {
+    max-width: 1100px;
+    margin: 40px auto;
+    padding: 0 20px;
+}
+
+.grid {
+    display: grid;
+    gap: 16px;
+}
+
+@media (min-width: 960px) {
+    .grid-2 {
+        grid-template-columns: 1.2fr .8fr;
+    }
+}
+
+.row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    white-space: nowrap;
+}
+
+/* ========== Typography ========== */
+.title {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: .2px;
+    margin: 0 0 6px;
+}
+
+.subtitle {
+    color: var(--muted);
+    margin: 0 0 20px;
+}
+
+label {
+    display: block;
+    margin: 10px 0 6px;
+    font-weight: 600;
+}
+
+.hint {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.tiny {
+    color: #aeb7c6;
+    font-size: 12px;
+}
+
+/* ========== Form Controls ========== */
+input[type=text],
+textarea,
+select {
+    width: 100%;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: #e8eef7;
+    border-radius: 10px;
+    padding: 10px 12px;
+    outline: none;
+}
+
+textarea {
+    min-height: 90px;
+    resize: vertical;
+}
+
+/* ========== Buttons ========== */
+.btns {
+    display: flex;
+    gap: 8px;
+}
+
+.btn {
+    background: #171b22;
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    border-radius: 10px;
+    color: #dfe6f2;
+    cursor: pointer;
+}
+
+.btn:hover {
+    background: #1a2029;
+}
+
+.btn.primary {
+    background: linear-gradient(180deg, #24364a, #1a2838);
+    border-color: #2f3a4a;
+    color: #eaf2ff;
+}
+
+.btn.small {
+    font-size: 12px;
+    padding: 6px 10px;
+}
+
+/* ========== Checkbox ========== */
+.checkbox {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.checkbox.small {
+    font-size: 12px;
+}
+
+/* ========== Chips ========== */
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.chip {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    background: #0e1217;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 6px 10px;
+}
+
+.chip-text {
+    font-size: 12px;
+    color: #d9e2ef;
+}
+
+.chip .x {
+    cursor: pointer;
+    opacity: .7;
+}
+
+.chip .x:hover {
+    opacity: 1;
+}
+
+/* ========== Cards ========== */
+.card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, .2);
+}
+
+.card h3 {
+    margin: 0 0 12px;
+    font-size: 18px;
+}
+
+/* ========== Task Queue ========== */
+.task-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 10px;
+    align-content: start;
+}
+
+.queue-item {
+    background: #0c1015;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px;
+    margin-bottom: 10px;
+}
+
+.q-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.q-url {
+    font-weight: 600;
+    max-width: 70%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.q-right {
+    color: var(--muted);
+}
+
+/* 捲軸容器 */
+.task-scroll {
+    max-height: 60vh;
+    overflow: auto;
+    padding-right: 8px;
+    scrollbar-gutter: stable both-edges;
+}
+
+/* WebKit Scrollbar */
+.task-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+.task-scroll::-webkit-scrollbar-track {
+    background: #0d1218;
+    border-radius: 12px;
+}
+
+.task-scroll::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, #2a3342, #3b475d);
+    border-radius: 12px;
+    border: 2px solid #0d1218;
+}
+
+.task-scroll::-webkit-scrollbar-thumb:hover {
+    background: #485673;
+}
+
+/* Firefox Scrollbar */
+.task-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #3b475d #0d1218;
+}
+
+/* ========== Results ========== */
+.results-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+}
+
+.result {
+    background: #0c1015;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px;
+}
+
+.result .meta {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+}
+
+.result .url {
+    max-width: 72%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #9ecbff;
+    text-decoration: none;
+}
+
+.result .score {
+    font-size: 28px;
+    font-weight: 800;
+    color: #eaf2ff;
+}
+
+.result .tiny {
+    text-align: center;
+    margin-top: 4px;
+    color: #aaa;
+}
+
+
+/* ========== Divider ========== */
+.divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #30394a, transparent);
+    margin: 8px 0;
+}
+
+/* ========== Progress Bar ========== */
+.progress {
+    background: #0c0f14;
+    border: 1px solid #1c222c;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.progress .bar {
+    height: 100%;
+    background: linear-gradient(90deg, #3c83f6, #5aa4ff);
+}
+
+/* ========== Log Viewer ========== */
+pre.log {
+    max-height: 220px;
+    overflow: auto;
+    background: #0a0e13;
+    border: 1px solid var(--border);
+    padding: 10px;
+    border-radius: 10px;
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    color: #cfd7e6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-align: left;
+}
+
+pre.log::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+}
+
+pre.log::-webkit-scrollbar-track {
+    background: #0d1218;
+    border-radius: 10px;
+}
+
+pre.log::-webkit-scrollbar-thumb {
+    background: #2a3342;
+    border-radius: 10px;
+}
+
+pre.log::-webkit-scrollbar-thumb:hover {
+    background: #364154;
+}
+
+/* ========== Responsive ========== */
+@media (max-width: 480px) {
+    .task-grid {
+        grid-template-columns: 1fr;
+    }
+}
