@@ -42,7 +42,7 @@
         <div class="row" style="justify-content:space-between;margin-top:10px">
           <label class="checkbox">
             <input v-model="keep" type="checkbox" />
-            保留中間檔案（Debug 用）
+            保留中間檔案
           </label>
           <div class="btns">
             <button class="btn" @click="clearAll">清除</button>
@@ -62,7 +62,7 @@
       </section>
 
       <!-- 任務佇列 -->
-      <aside class="card">
+      <aside class="card queue-panel">
         <div class="row" style="justify-content:space-between;align-items:center">
           <h3 style="margin:0">任務佇列</h3>
           <div class="sticky-actions">
@@ -70,7 +70,8 @@
           </div>
         </div>
 
-        <div class="queue" style="display:grid;gap:10px;margin-top:10px">
+        <!-- 讓這個容器滾動 -->
+        <div class="task-scroll">
           <div v-if="!tasks.length" class="hint">尚無任務</div>
 
           <div v-for="t in tasks" :key="t.id" class="queue-item">
@@ -97,10 +98,8 @@
 
         <div v-for="r in sortedResults" :key="r.url" class="result">
           <div class="meta">
-            <div>
-              <div class="tiny">{{ labelFor(r.url) }}</div>
-              <div class="score">{{ r.score }}%</div>
-            </div>
+            <a class="url" :href="r.url" target="_blank" rel="noopener">{{ labelFor(r.url) }}</a>
+            <div class="score">{{ r.score }}%</div>
           </div>
           <div class="divider"></div>
           <div class="tiny">音訊 {{ r.audio }}｜畫面 {{ r.visual }}｜內容 {{ r.text }}</div>
@@ -403,7 +402,7 @@ input[type=text], textarea, select{
   width:100%;background:var(--panel-2);border:1px solid var(--border);
   color:#e8eef7;border-radius:10px;padding:10px 12px;outline:none}
 textarea{min-height:90px;resize:vertical}
-.row{display:flex;gap:10px;align-items:center}
+.row{display:flex;gap:10px;align-items:center;white-space: nowrap;}
 .btns{display:flex;gap:8px}
 .btn{background:#171b22;border:1px solid var(--border);padding:8px 12px;border-radius:10px;color:#dfe6f2;cursor:pointer}
 .btn:hover{background:#1a2029}
@@ -419,6 +418,14 @@ textarea{min-height:90px;resize:vertical}
 .chip .x{cursor:pointer;opacity:.7}
 .chip .x:hover{opacity:1}
 
+/* 新增：任務卡片自動分欄，避免一路往下排 */
+.task-grid{
+  display:grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap:10px;
+  align-content:start;
+}
+
 .queue-item{background:#0c1015;border:1px solid var(--border);border-radius:12px;padding:10px}
 .q-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
 .q-url{font-weight:600;max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -429,19 +436,26 @@ textarea{min-height:90px;resize:vertical}
 
 .results-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
 .result{background:#0c1015;border:1px solid var(--border);border-radius:12px;padding:10px}
-.result .meta{display:flex;justify-content:space-between;align-items:center}
+.result .meta {display: flex;justify-content: center;align-items: center;gap: 8px;}
+.result .url {max-width: 72%;overflow: hidden;text-overflow: ellipsis;white-space: nowrap;color: #9ecbff;text-decoration: none;}
 .result .score{font-size:28px;font-weight:800;color:#eaf2ff}
 .divider{height:1px;background:linear-gradient(90deg,transparent,#30394a,transparent);margin:8px 0}
 .tiny{color:#aeb7c6;font-size:12px}
 
-/* Log 區：斷行＋美化捲軸，避免撐爆畫面 */
+/* Log 區：斷行＋美化捲軸，避免撐爆畫面（文字強制靠左） */
 pre.log{
   max-height:220px;overflow:auto;background:#0a0e13;border:1px solid var(--border);
   padding:10px;border-radius:10px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;color:#cfd7e6;
   white-space:pre-wrap;word-break:break-word;
+  text-align:left; /* 文字靠左 */
 }
 pre.log::-webkit-scrollbar{ height:8px; width:8px; }
 pre.log::-webkit-scrollbar-track{ background:#0d1218; border-radius:10px; }
 pre.log::-webkit-scrollbar-thumb{ background:#2a3342; border-radius:10px; }
 pre.log::-webkit-scrollbar-thumb:hover{ background:#364154; }
+
+/* 小螢幕時單欄 */
+@media (max-width: 480px){
+  .task-grid{ grid-template-columns: 1fr; }
+}
 </style>

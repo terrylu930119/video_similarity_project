@@ -10,36 +10,43 @@ from logging.handlers import TimedRotatingFileHandler  # 新增
 log_dir: str = "logs"
 os.makedirs(log_dir, exist_ok=True)
 
-# 配置日誌格式
-formatter: logging.Formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+# 通用格式（給檔案用，保留時間戳）
+file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
-# 使用 TimedRotatingFileHandler，設定每天午夜輪替
+# console 是否用「純訊息」(交由上層統一套時間戳)
+PLAIN_CONSOLE = os.getenv("PLAIN_CONSOLE_LOG", "0") in ("1", "true", "True")
+
+# 使用 TimedRotatingFileHandler（保留時間戳）
 file_handler = TimedRotatingFileHandler(
     filename=os.path.join(log_dir, "app.log"),
-    when="midnight",       # 每天午夜
-    interval=1,            # 間隔 1 天
-    backupCount=7,         # 最多保留 7 份舊檔
+    when="midnight",
+    interval=1,
+    backupCount=7,
     encoding="utf-8",
-    utc=False              # 若要以 UTC 轉檔可改成 True
+    utc=False
 )
 # 設定檔名後綴，產出 app.log.YYYY-MM-DD 格式
 file_handler.suffix = "%Y-%m-%d"
-file_handler.setFormatter(formatter)
+file_handler.setFormatter(file_formatter)
 
-# 配置控制台處理器
+# 控制台處理器：依環境變數切換格式
 console_handler: logging.StreamHandler = logging.StreamHandler(sys.stdout)
-console_handler.setFormatter(formatter)
+if PLAIN_CONSOLE:
+    console_handler.setFormatter(logging.Formatter("%(message)s"))  # ← 純訊息
+else:
+    console_handler.setFormatter(file_formatter)  # ← 獨立跑 CLI 時保留時間戳
 
 # 創建日誌記錄器
 logger: logging.Logger = logging.getLogger("video_similarity")
 logger.setLevel(logging.INFO)
 
-# 清除現有的處理器
+# 清除現有處理器並添加新的
 logger.handlers = []
-
-# 添加處理器
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+
+# 避免往 root 傳播導致重印
+logger.propagate = False
 
 
 # 添加性能監控功能

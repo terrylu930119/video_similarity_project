@@ -173,3 +173,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Custom ignores
+.cursor/
+.vscode/
+downloads/
+feature_cache/
+logs/
+www.youtube.com_cookies.txt

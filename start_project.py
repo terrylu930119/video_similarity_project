@@ -1,8 +1,7 @@
+import sys
+import time
 import subprocess
 import webbrowser
-import sys
-import os
-import time
 from pathlib import Path
 
 # ========= 設定 =========
