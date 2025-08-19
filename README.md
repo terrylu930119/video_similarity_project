@@ -143,11 +143,16 @@ video_similarity_project/
 ```bash
 python start_project.py
 ```
+### IDE用法：
+在虛擬環境的終端執行 `cli/main.py` 並提供參考影片和一個或多個要比對的影片連結：
+```bash
+python -m cli.main --ref <參考影片網址> --comp <待比對影片網址1> <待比對影片網址2> ... [選項]
+```
 
 ### CLI用法：
 在虛擬環境的終端執行 `cli/main.py` 並提供參考影片和一個或多個要比對的影片連結：
 ```bash
-python cli/main.py --ref <參考影片網址> --comp <待比對影片網址1> <待比對影片網址2> ... [選項]
+python -m cli.main --ref <參考影片網址> --comp <待比對影片網址1> <待比對影片網址2> ... [選項]
 ```
 
 #### 必填參數：

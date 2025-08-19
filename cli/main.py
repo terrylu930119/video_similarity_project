@@ -9,10 +9,10 @@ import traceback
 import threading
 import multiprocessing
 from pathlib import Path
-from utils.logger import logger
+from utils.logger import logger, emit
 from utils.downloader import download_video
 from core.audio_processor import extract_audio
-from typing import Union, Dict, List, Optional, Callable
+from typing import Union, Dict, List, Optional
 from core.text_processor import transcribe_audio
 from concurrent.futures import ThreadPoolExecutor
 from utils.video_utils import extract_frames, get_video_info
@@ -32,18 +32,6 @@ _cleanup_in_progress = False
 def sha10(s: str) -> str:
     import hashlib
     return hashlib.sha1(s.encode("utf-8")).hexdigest()[:10]
-
-
-def emit(event_type: str, **kw):
-    """NDJSON event (ALSO flush immediately), safe fallback if non-serializable."""
-    obj = {"type": event_type, **kw}
-    try:
-        print(json.dumps(obj, ensure_ascii=False), flush=True)
-    except Exception as e:
-        # last resort: stringify
-        obj["__err"] = f"emit-serde:{e}"
-        obj["payload"] = {k: str(v) for k, v in kw.items()}
-        print(json.dumps(obj, ensure_ascii=False), flush=True)
 
 # ---------- Video Processor ----------
 
@@ -78,7 +66,6 @@ class VideoProcessor:
 
         data = self._process_video(video_path, link, task_id, preferred_lang)
         self.processed[link] = data
-        emit("progress", task_id=task_id, phase="extract", percent=60, msg="抽幀完成")
         return data
 
     def _process_video(self, video_path: str, video_url: str, task_id: str,
@@ -91,17 +78,16 @@ class VideoProcessor:
             raise ValueError(f"無法獲取影片資訊: {video_path}")
         duration: float = total_frames / fps
 
-        emit("progress", task_id=task_id, phase="audio", percent=60, msg="開始提取音訊")
+        emit("progress", task_id=task_id, phase="audio", percent=12, msg="開始提取音訊")
         audio_path: str = extract_audio(video_path)
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"音訊不存在: {audio_path}")
-        emit("progress", task_id=task_id, phase="audio", percent=62, msg="音訊就緒")
+        emit("progress", task_id=task_id, phase="audio", percent=18, msg="音訊就緒")
 
         transcript, lang = "", None
         try:
-            emit("progress", task_id=task_id, phase="transcribe", percent=20, msg="開始轉錄")
-            transcript, lang = transcribe_audio(audio_path, video_url, self.output_dir, preferred_lang)
-            emit("progress", task_id=task_id, phase="transcribe", percent=45, msg="轉錄完成")
+            emit("progress", task_id=task_id, phase="文本處理", percent=20, msg="開始處裡文本內容")
+            transcript, lang = transcribe_audio(audio_path, video_url, self.output_dir, preferred_lang, task_id=task_id)
         except Exception as e:
             logger.error(f"轉錄失敗: {e}")
             emit("log", task_id=task_id, msg=f"轉錄失敗: {e}")
@@ -120,7 +106,7 @@ class VideoProcessor:
             raise FileNotFoundError("沒有有效的幀檔案")
 
         # 抽幀進度大致算到 60%
-        emit("progress", task_id=task_id, phase="extract", percent=60, msg=f"使用現有的 {len(valid_frames)} 個幀文件")
+        emit("progress", task_id=task_id, phase="extract", percent=60, msg=f"抽幀完成")
 
         return {
             "video_path": video_path,
@@ -172,13 +158,12 @@ def main():
     parser.add_argument("--cache", default=str(CACHE_DIR), help="快取資料夾")
     parser.add_argument("--interval", default="auto", help="幀提取時間間隔（秒），可設為 auto 表示自動決定")
     parser.add_argument("--keep", action="store_true", help="是否保留中間檔案")
-    args = parser.parse_args()
 
     # 如果指令沒有提供參數，則使用預設值
     if len(sys.argv) == 1:
         args = parser.parse_args([
-            '--ref', '',
-            '--comp', '',
+            '--ref', 'https://www.youtube.com/watch?v=abTVn6EMsJI',
+            '--comp', 'https://www.bilibili.com/video/BV115bAzrET7/?spm_id_from=333.1365.rich-text.link.click&vd_source=6652d02982a20ea968442207129231f8',
             '--interval', 'auto',
             '--output', str(DOWNLOADS_DIR),
             '--cache', str(CACHE_DIR),
@@ -251,7 +236,9 @@ def main():
                      audio=result.get("audio_similarity", 0),
                      visual=result.get("image_similarity", 0),
                      text=result.get("text_similarity", 0),
-                     score=result.get("overall_similarity", 0))
+                     score=result.get("overall_similarity", 0),
+                     text_meaningful=result.get("text_meaningful"),
+                     text_status=result.get("text_status"))
                 emit("progress", task_id=task_id, phase="compare", percent=100, msg="完成")
 
                 # 更新 ref 整體進度

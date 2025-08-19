@@ -207,6 +207,22 @@ textarea {
     color: var(--muted);
 }
 
+.tag {
+    font-size: 12px;
+    padding: 2px 6px;
+    margin-left: 6px;
+    border-radius: 999px;
+    border: 1px solid #d1d5db;
+    background: #f9fafb;
+    color: #374151;
+}
+
+.tag.warn {
+    border-color: #f59e0b;
+    color: #92400e;
+    background: #fffbeb;
+}
+
 /* 捲軸容器 */
 .task-scroll {
     max-height: 60vh;

@@ -5,6 +5,7 @@ import math
 import json
 import torch
 import librosa
+import inspect
 import threading
 import torchaudio
 import numpy as np
@@ -12,8 +13,8 @@ from math import ceil
 from tqdm import tqdm
 import soundfile as sf
 from torch import Tensor
-from utils.logger import logger
 from collections import Counter
+from utils.logger import logger, emit
 from utils.gpu_utils import gpu_manager
 from faster_whisper import WhisperModel
 from typing import Dict, List, Optional, Tuple
@@ -22,11 +23,55 @@ from utils.downloader import generate_safe_filename
 from utils.audio_cleaner import load_and_clean_audio
 from sentence_transformers import SentenceTransformer, util
 
-# ======================== 全域模型 ========================
+# ======================== 全域模型 & 參數 ========================
 _whisper_model: Optional[WhisperModel] = None
 _whisper_lock = threading.Lock()
 _sentence_transformer: Optional[SentenceTransformer] = None
-_debug_mode: bool = False
+_debug_mode: bool = True
+_st_lock = threading.Lock()
+
+# ======================== 安全模型載入工具（含 assign=True） ========================
+
+
+def safe_load_module(model: torch.nn.Module, ckpt_path: str,
+                     device: str = None, dtype: torch.dtype = torch.float32) -> torch.nn.Module:
+    """
+    通用安全載入：
+    1) 優先用 to_empty() 在正確 device/dtype 分配參數
+    2) load_state_dict(assign=True)（PyTorch 2.4+）避免 meta no-op
+    3) 兼容 DataParallel 的 'module.' 前綴
+    """
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # 1) 分配參數記憶體
+    if hasattr(model, "to_empty"):
+        model.to_empty(device=device, dtype=dtype)
+    else:
+        model.to(device=device, dtype=dtype)
+
+    # 2) 讀 ckpt（先丟 CPU）
+    state = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(state, dict) and "state_dict" in state and isinstance(state["state_dict"], dict):
+        state = state["state_dict"]
+    if isinstance(state, dict) and state and all(k.startswith("module.") for k in state.keys()):
+        state = {k[len("module."):]: v for k, v in state.items()}
+
+    # 3) assign=True（若可用）
+    sig = inspect.signature(model.load_state_dict)
+    try:
+        if "assign" in sig.parameters:
+            missing, unexpected = model.load_state_dict(state, assign=True)
+        else:
+            missing, unexpected = model.load_state_dict(state)
+    except TypeError:
+        missing, unexpected = model.load_state_dict(state)
+
+    if missing or unexpected:
+        print(f"[safe_load_module] missing={missing}, unexpected={unexpected}")
+
+    model.eval()
+    return model
 
 # ======================== 模型載入函數 ========================
 
@@ -48,40 +93,57 @@ def get_whisper_model() -> WhisperModel:
 
 
 def get_sentence_transformer() -> SentenceTransformer:
+    """
+    穩健載入：CPU 先實體化避免 meta → 視需要搬到 CUDA。
+    失敗時清顯存並回退 CPU。
+    """
     global _sentence_transformer
     if _sentence_transformer is not None:
         return _sentence_transformer
 
-    try:
-        device = gpu_manager.get_device()
-        logger.info(f"載入模型中，目標設備：{device}")
+    with _st_lock:
+        if _sentence_transformer is not None:
+            return _sentence_transformer
 
-        model = SentenceTransformer(
-            "paraphrase-multilingual-mpnet-base-v2", device=device)
+        # 目標裝置字串化
+        dev_obj = gpu_manager.get_device()
+        target = "cuda" if getattr(dev_obj, "type", "cpu") == "cuda" and torch.cuda.is_available() else "cpu"
+        logger.info(f"載入模型中，目標設備：{target}")
 
-        # encode 觸發 lazy weights 實體化
-        test_embed: Tensor = model.encode("test", convert_to_tensor=True)
+        try:
+            # 1) 先在 CPU 完整實體化，徹底避開 meta tensor
+            torch.set_grad_enabled(False)
+            cpu_model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2", device="cpu")
+            with torch.inference_mode():
+                test_embed: Tensor = cpu_model.encode("warmup_materialize", convert_to_tensor=True)
 
-        # 防止 meta tensor
-        if hasattr(test_embed, "is_meta") and test_embed.is_meta:
-            raise RuntimeError("模型權重尚未實體化 (meta tensor)")
+            # 基本健康檢查
+            if getattr(test_embed, "is_meta", False):
+                raise RuntimeError("模型權重尚未實體化 (meta tensor)")
+            if not torch.isfinite(test_embed).all():
+                raise RuntimeError("模型初始化失敗：embedding 含有 NaN 或 Inf")
 
-        # 檢查是否有 NaN / Inf
-        if not torch.isfinite(test_embed).all():
-            raise RuntimeError("模型初始化失敗：embedding 含有 NaN 或 Inf")
+            # 2) 如需 CUDA，再搬裝置（此時已無 meta）
+            model = cpu_model if target == "cpu" else cpu_model.to(target)
+            model.eval()
 
-        model.eval()
-        _sentence_transformer = model
-        logger.info(f"模型載入成功，裝置：{model.device}")
-        return model
+            _sentence_transformer = model
+            logger.info(f"模型載入成功，裝置：{_sentence_transformer.device}")
+            return _sentence_transformer
 
-    except Exception as e:
-        logger.error(f"載入 SentenceTransformer 失敗，回退 CPU: {e}")
-        model = SentenceTransformer(
-            "paraphrase-multilingual-mpnet-base-v2", device='cpu')
-        model.eval()
-        _sentence_transformer = model
-        return model
+        except Exception as e:
+            logger.error(f"載入 SentenceTransformer 失敗，回退 CPU：{e}")
+            # 清顯存避免殘留
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+            # 最終保底：CPU 直載
+            model = SentenceTransformer("paraphrase-multilingual-mpnet-base-v2", device="cpu")
+            model.eval()
+            _sentence_transformer = model
+            return model
 
 # ======================== URL 與字幕處理 ========================
 
@@ -345,9 +407,9 @@ def split_audio_for_transcription(audio_path: str, segment_duration: int = 30, o
 
 
 def transcribe_audio(audio_path: str, video_url: Optional[str] = None, output_dir: Optional[str] = None,
-                     preferred_lang: Optional[str] = None,
-                     use_silence_detection: bool = True, merge_gap_threshold: int = 1000, min_segment_duration: int = 3,
-                     track_languages: bool = True) -> Tuple[str, Optional[str]]:
+                     preferred_lang: Optional[str] = None, use_silence_detection: bool = True,
+                     merge_gap_threshold: int = 1000, min_segment_duration: int = 3, track_languages: bool = True,
+                     task_id: Optional[str] = None) -> Tuple[str, Optional[str]]:
     """核心：先嘗試使用字幕；若無字幕則切割 → Whisper 轉錄。"""
 
     # 若已存在轉錄結果直接回傳
@@ -369,7 +431,13 @@ def transcribe_audio(audio_path: str, video_url: Optional[str] = None, output_di
                     lang_data = json.load(meta_file)
                     lang = lang_data.get("lang", None)
 
-            logger.info(f"已載入快取轉錄: {transcript_path}（語言: {lang}")
+            logger.info(f"已載入快取轉錄: {transcript_path}（語言: {lang})")
+
+            # 判斷來源字樣，對前端發 45%「文本就緒（快取）」訊息
+            if task_id:
+                src = "字幕" if cached.startswith("來源：字幕文件") else "轉錄"
+                emit("progress", task_id=task_id, phase="transcribe", percent=45, msg=f"文本就緒（快取，{src})")
+
             return cached, lang
         except Exception as e:
             logger.warning(f"讀取快取失敗: {e}")
@@ -387,6 +455,11 @@ def transcribe_audio(audio_path: str, video_url: Optional[str] = None, output_di
                 meta_path = transcript_path.replace(".txt", ".json")
                 with open(meta_path, "w", encoding="utf-8") as meta_file:
                     json.dump({"lang": sub_lang}, meta_file)
+
+            # 告知前端：這次是「找到字幕」→ 文本完成
+            if task_id:
+                emit("progress", task_id=task_id, phase="transcribe", percent=45, msg="字幕就緒")
+
             return sub_txt, sub_lang
 
     # Whisper 轉錄
@@ -491,6 +564,9 @@ def transcribe_audio(audio_path: str, video_url: Optional[str] = None, output_di
     logger.info(
         f"轉錄完成，共成功 {len(transcripts)} 段，語言分布: {dict(lang_counter) if seg_langs else {}}，最多語言: {most_common_lang}")
 
+    if task_id:
+        emit("progress", task_id=task_id, phase="transcribe", percent=45, msg="轉錄完成")
+
     return final_txt, most_common_lang
 
 # ======================== 重複判斷與濾除邏輯 ========================
@@ -564,9 +640,7 @@ def is_hallucination_phrase(text: str, phrases: list[str] = None, threshold: int
     if phrases is None:
         phrases = [
             "Thank you for watching",
-            "This is the first time I've ever seen",
-            "See you in the next video",
-            "XD"
+            "Thank for watching",
         ]
     for phrase in phrases:
         if text.count(phrase) >= threshold:

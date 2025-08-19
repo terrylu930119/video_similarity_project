@@ -221,11 +221,17 @@ export function useCompare() {
             if (e.type === 'progress') {
                 const t = findTaskByEvent(e)
                 if (t) {
+                    const hint = (typeof e.overallHint === 'number') ? Math.round(e.overallHint * 100) : null
                     const p = Number.isFinite(+e.percent) ? +e.percent : (t.progress || 0)
-                    t.progress = Math.max(Number(t.progress || 0), p)
-                    t.status = humanPhase(e.phase, t.progress)
+                    const np = (hint ?? p)
+                    t.progress = Math.max(Number(t.progress || 0), np)
+                    // 狀態優先吃後端 phaseName（例如「字幕解析」「音訊處理」）
+                    if (e.phaseName) t.status = `${e.phaseName} ${t.progress}%`
+                    else t.status = humanPhase(e.phase, t.progress)
                     if (e.msg) pushLog(t, e.msg)
-                    if (p >= 100 || (e.phase === 'compare' && p >= 100)) t.status = '完成'
+                    if (e.textSource) t.text_source = e.textSource   // 'subtitle' | 'asr'
+                    if (e.text_skipped) { t.text_skipped = true; if (!t.text_status && e.text_status) t.text_status = e.text_status }
+                    if (np >= 100 || (e.phase === 'compare' && np >= 100)) t.status = '完成'
                 }
             } else if (e.type === 'log') {
                 const t = findTaskByEvent(e)
@@ -244,10 +250,18 @@ export function useCompare() {
                         visual: Number(e.visual || 0).toFixed(2),
                         audio: Number(e.audio || 0).toFixed(2),
                         text: Number(e.text || 0).toFixed(2),
+                        text_meaningful: (typeof e.text_meaningful === 'boolean' ? e.text_meaningful : true),
+                        text_status: (typeof e.text_status === 'string' ? e.text_status : ''),
                         hot: Array.isArray(e.hot) ? e.hot.join('、') : ''
                     }
                     if (idx >= 0) results.splice(idx, 1, row)
                     else results.push(row)
+                }
+                // 任務卡也存一份文本狀態（之後 QueuePanel 用得到）
+                if (t) {
+                    if (typeof e.text_meaningful === 'boolean') t.text_meaningful = e.text_meaningful
+                    if (typeof e.text_status === 'string') t.text_status = e.text_status
+                    if (t.text_meaningful === false) t.text_skipped = true
                 }
                 if (tasks.every(x => ['完成', '失敗', '已取消'].includes(x.status))) running.value = false
                 finalizeRefCardIfAllDone()

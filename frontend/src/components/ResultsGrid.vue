@@ -19,7 +19,15 @@ const safeLabel = (fn, url) => { try { return fn(url || '') } catch { return '�
         <div class="score">{{ r.score ?? 0 }}%</div>
       </div>
       <div class="divider"></div>
-      <div class="tiny">音訊 {{ r.audio ?? '0.00' }}｜畫面 {{ r.visual ?? '0.00' }}｜內容 {{ r.text ?? '0.00' }}</div>
+      <div class="tiny">
+        音訊 {{ r.audio ?? '0.00' }}｜畫面 {{ r.visual ?? '0.00' }}｜內容
+        <template v-if="r.text_meaningful === false">
+          — <span :title="r.text_status || '文本跳過'">（跳過）</span>
+        </template>
+        <template v-else>
+          {{ r.text ?? '0.00' }}
+        </template>
+      </div>
     </div>
   </div>
 </template>

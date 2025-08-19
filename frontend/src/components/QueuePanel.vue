@@ -12,7 +12,7 @@ const emit = defineEmits(['cancel','stop-all'])
 const tasksV = computed(() => unref(props.tasks) ?? [])
 const isCancellable = (t) => {
   const s = (t.status || '').split(' ')[0]
-  return ['佇列中','待處理','下載中','轉錄中','抽幀中','音訊比對','畫面比對','文本比對','比對中'].includes(s)
+  return ['佇列中','待處理','下載中','轉錄中','字幕解析','抽幀中','音訊比對','畫面比對','文本比對','比對中'].includes(s)
 }
 </script>
 
@@ -30,7 +30,13 @@ const isCancellable = (t) => {
     <div v-for="t in tasksV" :key="t.id || t.url" class="queue-item">
       <div class="q-head">
         <div class="q-url" :title="t.url">{{ t.display || t.url }}</div>
-        <div class="q-right tiny">{{ t.status }}</div>
+        <div class="q-right tiny">
+          <span class="status">{{ t.status }}</span>
+          <span v-if="t.text_source" class="tag" :title="t.text_source === 'subtitle' ? '來自字幕' : '自動轉錄'">
+            {{ t.text_source === 'subtitle' ? '字幕' : 'ASR' }}
+          </span>
+          <span v-if="t.text_skipped" class="tag warn" :title="t.text_status || '文本跳過'">文本跳過</span>
+        </div>
       </div>
 
       <ProgressBar :value="t.progress || 0" small />

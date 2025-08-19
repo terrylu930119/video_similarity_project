@@ -11,7 +11,7 @@ export function useVideoId() {
             if (host.includes('bilibili.com') || host.includes('b23.tv')) {
                 const m = u.pathname.match(/(BV[0-9A-Za-z]{10})/)
                 const id = (m && m[1]) || u.pathname.split('/').filter(Boolean).pop()
-                return id ? `Bili: ${id}` : `Bili: ?`
+                return id ? `BiliBili: ${id}` : `BiliBili: ?`
             }
             const tail = u.pathname.split('/').filter(Boolean).pop()
             return tail ? `${host}: ${tail}` : host
@@ -46,8 +46,10 @@ export function useVideoId() {
 
     function humanPhase(phase, pct) {
         const label = {
-            queued: '待處理', download: '下載中', transcribe: '轉錄中',
-            extract: '抽幀中', audio: '音訊比對', image: '畫面比對', text: '文本比對', compare: '比對中'
+            queued: '待處理', download: '下載中',
+            transcribe: '轉錄中', subtitle: '字幕解析',
+            extract: '抽幀中', audio: '音訊比對',
+            image: '畫面比對', text: '文本比對', compare: '比對中'
         }[phase] || '處理中'
         const n = Math.max(0, Math.min(100, Math.round(pct || 0)))
         return `${label} ${n}%`
