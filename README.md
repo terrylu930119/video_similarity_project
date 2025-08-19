@@ -277,4 +277,4 @@ https://www.bilibili.com/video/BVXXXXX...                    0.6578       0.7012
 - **非商業用途** → 遵循 [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) 授權，免費使用，但禁止商業用途。
 - **商業用途** → 必須取得作者書面授權，並依協議支付分潤（預設為淨收入 20%，可依協議調整）。
 
-如需商業授權，請聯繫：your_email@example.com
+如需商業授權，請聯繫：lu930119@gmail.com
