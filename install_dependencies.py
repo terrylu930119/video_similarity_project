@@ -290,7 +290,7 @@ def check_installed_packages() -> bool:
 
     required_packages = [
         "torch", "torchvision", "torchaudio",
-        "opencv-python", "librosa", "numpy",
+        "cv2", "librosa", "numpy",
         "faster-whisper", "sentence-transformers",
         "yt-dlp", "fastapi", "uvicorn"
     ]
