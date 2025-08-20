@@ -78,8 +78,7 @@ video_similarity_project/
 │   ├── image_processor.py    
 │   ├── audio_processor.py
 │   ├── text_processor.py
-│   ├── similarity.py
-│   └── ... 
+│   └── similarity.py 
 ├── utils/                 # 工具模組
 │   ├── downloader.py          # 影片下載工具 (使用 yt-dlp)
 │   ├── video_utils.py         # 視頻資訊獲取與影格處理
