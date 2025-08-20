@@ -1,3 +1,4 @@
+# utils/video_utils.py
 import os
 import cv2
 import torch
@@ -6,11 +7,19 @@ import numpy as np
 from utils.logger import logger
 from typing import List, Tuple, Union
 
-# =============== 基礎工具：影片檔案檢查 ===============
+# ======================== 基礎工具：影片檔案檢查 ========================
 
 
 def check_video_file(video_path: str) -> bool:
-    """檢查影片檔案是否存在且可以打開"""
+    """
+    檢查影片檔案是否存在且可以打開
+
+    Args:
+        video_path: 影片檔案路徑
+
+    Returns:
+        bool: 影片檔案是否有效
+    """
     if not os.path.exists(video_path):
         logger.error(f"影片檔案不存在: {video_path}")
         return False
@@ -23,18 +32,17 @@ def check_video_file(video_path: str) -> bool:
     cap.release()
     return True
 
-# =============== 幀儲存與處理 ===============
 
-
+# ======================== 幀儲存與處理 ========================
 def save_frame(frame_data: Tuple[np.ndarray, str]) -> str:
     """
     保存單個幀
 
-    參數:
+    Args:
         frame_data: (幀數據, 保存路徑) 的元組
 
-    返回:
-        成功保存的幀路徑，失敗則返回空字符串
+    Returns:
+        str: 成功保存的幀路徑，失敗則返回空字符串
     """
     frame, frame_path = frame_data
     try:
@@ -44,73 +52,177 @@ def save_frame(frame_data: Tuple[np.ndarray, str]) -> str:
         logger.error(f"保存幀時出錯 {frame_path}: {str(e)}")
         return ""
 
-# =============== 幀提取（含快取與 GPU 支援） ===============
+
+# ======================== 幀提取（含快取與 GPU 支援） ========================
+def _setup_frame_extraction_environment(video_path: str, output_dir: str) -> Tuple[str, str, str]:
+    """
+    設定幀提取環境
+
+    Args:
+        video_path: 影片路徑
+        output_dir: 輸出目錄
+
+    Returns:
+        Tuple[str, str, str]: (影片 ID, 幀目錄, 輸出模式)
+    """
+    video_basename: str = os.path.basename(video_path)
+    video_id: str = os.path.splitext(video_basename)[0]
+    frames_dir: str = os.path.join(output_dir, video_id)
+    os.makedirs(frames_dir, exist_ok=True)
+
+    output_pattern: str = os.path.join(frames_dir, f'{video_id}_frame_%04d.jpg')
+    return video_id, frames_dir, output_pattern
+
+
+def _check_existing_frames(frames_dir: str, video_id: str) -> List[str]:
+    """
+    檢查現有的幀檔案
+
+    Args:
+        frames_dir: 幀目錄
+        video_id: 影片 ID
+
+    Returns:
+        List[str]: 現有幀檔案路徑列表
+    """
+    existing_frames: List[str] = sorted([
+        os.path.join(frames_dir, f)
+        for f in os.listdir(frames_dir)
+        if f.startswith(f'{video_id}_frame_') and f.endswith('.jpg')
+    ])
+
+    if existing_frames:
+        valid_frames: List[str] = [
+            f for f in existing_frames if os.path.exists(f) and os.path.getsize(f) > 0]
+        if valid_frames:
+            logger.info(f"使用現有的 {len(valid_frames)} 個幀文件")
+            return valid_frames
+        else:
+            logger.warning("現有的幀文件無效，將重新提取")
+
+    return []
+
+
+def _build_ffmpeg_command(video_path: str, time_interval: float) -> List[str]:
+    """
+    建立 FFmpeg 命令
+
+    Args:
+        video_path: 影片路徑
+        time_interval: 時間間隔
+
+    Returns:
+        List[str]: FFmpeg 命令參數列表
+    """
+    return [
+        'ffmpeg', '-i', video_path,
+        '-vf', f'fps=1/{time_interval}',
+        '-frame_pts', '1',
+        '-qscale:v', '2',
+        '-y'
+    ]
+
+
+def _try_gpu_acceleration(cmd: List[str], output_pattern: str) -> bool:
+    """
+    嘗試使用 GPU 加速
+
+    Args:
+        cmd: 基礎 FFmpeg 命令
+        output_pattern: 輸出檔案模式
+
+    Returns:
+        bool: GPU 加速是否成功
+    """
+    if not torch.cuda.is_available():
+        return False
+
+    try:
+        gpu_cmd: List[str] = cmd.copy()
+        gpu_cmd.insert(1, '-hwaccel')
+        gpu_cmd.insert(2, 'cuda')
+        gpu_cmd.append(output_pattern)
+
+        logger.info(f"嘗試使用 GPU 加速提取幀，命令: {' '.join(gpu_cmd)}")
+        subprocess.run(gpu_cmd, check=True, capture_output=True, text=True)
+        logger.info("成功使用 GPU 加速提取幀")
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"GPU 加速失敗，切換到 CPU 模式: {e.stderr}")
+        return False
+
+
+def _extract_frames_with_ffmpeg(cmd: List[str], output_pattern: str) -> None:
+    """
+    使用 FFmpeg 提取幀
+
+    Args:
+        cmd: FFmpeg 命令
+        output_pattern: 輸出檔案模式
+    """
+    cmd.append(output_pattern)
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+
+def _collect_extracted_frames(frames_dir: str, video_id: str) -> List[str]:
+    """
+    收集提取的幀檔案
+
+    Args:
+        frames_dir: 幀目錄
+        video_id: 影片 ID
+
+    Returns:
+        List[str]: 幀檔案路徑列表
+    """
+    frames: List[str] = sorted([
+        os.path.join(frames_dir, f)
+        for f in os.listdir(frames_dir)
+        if f.startswith(f'{video_id}_frame_') and f.endswith('.jpg')
+    ])
+
+    if not frames:
+        logger.error("未生成任何幀文件")
+        return []
+
+    logger.info(f"成功提取 {len(frames)} 個幀")
+    return frames
 
 
 def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0) -> List[str]:
+    """
+    從影片中提取幀
+
+    Args:
+        video_path: 影片路徑
+        output_dir: 輸出目錄
+        time_interval: 幀提取時間間隔（秒）
+
+    Returns:
+        List[str]: 提取的幀檔案路徑列表
+    """
     try:
+        # 檢查影片檔案
         if not check_video_file(video_path):
             return []
 
-        video_basename: str = os.path.basename(video_path)
-        video_id: str = os.path.splitext(video_basename)[0]
-        frames_dir: str = os.path.join(output_dir, video_id)
-        os.makedirs(frames_dir, exist_ok=True)
+        # 設定環境
+        video_id, frames_dir, output_pattern = _setup_frame_extraction_environment(video_path, output_dir)
 
-        existing_frames: List[str] = sorted([
-            os.path.join(frames_dir, f)
-            for f in os.listdir(frames_dir)
-            if f.startswith(f'{video_id}_frame_') and f.endswith('.jpg')
-        ])
-
+        # 檢查現有幀
+        existing_frames = _check_existing_frames(frames_dir, video_id)
         if existing_frames:
-            valid_frames: List[str] = [
-                f for f in existing_frames if os.path.exists(f) and os.path.getsize(f) > 0]
-            if valid_frames:
-                logger.info(f"使用現有的 {len(valid_frames)} 個幀文件")
-                return valid_frames
-            else:
-                logger.warning("現有的幀文件無效，將重新提取")
+            return existing_frames
 
-        output_pattern: str = os.path.join(frames_dir, f'{video_id}_frame_%04d.jpg')
-        cmd: List[str] = [
-            'ffmpeg', '-i', video_path,
-            '-vf', f'fps=1/{time_interval}',
-            '-frame_pts', '1',
-            '-qscale:v', '2',
-            '-y'
-        ]
+        # 建立 FFmpeg 命令
+        cmd = _build_ffmpeg_command(video_path, time_interval)
 
-        if torch.cuda.is_available():
-            try:
-                gpu_cmd: List[str] = cmd.copy()
-                gpu_cmd.insert(1, '-hwaccel')
-                gpu_cmd.insert(2, 'cuda')
-                gpu_cmd.append(output_pattern)
+        # 嘗試 GPU 加速，失敗則使用 CPU
+        if not _try_gpu_acceleration(cmd, output_pattern):
+            _extract_frames_with_ffmpeg(cmd, output_pattern)
 
-                logger.info(f"嘗試使用 GPU 加速提取幀，命令: {' '.join(gpu_cmd)}")
-                subprocess.run(gpu_cmd, check=True, capture_output=True, text=True)
-                logger.info("成功使用 GPU 加速提取幀")
-            except subprocess.CalledProcessError as e:
-                logger.warning(f"GPU 加速失敗，切換到 CPU 模式: {e.stderr}")
-                cmd.append(output_pattern)
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
-        else:
-            cmd.append(output_pattern)
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-
-        frames: List[str] = sorted([
-            os.path.join(frames_dir, f)
-            for f in os.listdir(frames_dir)
-            if f.startswith(f'{video_id}_frame_') and f.endswith('.jpg')
-        ])
-
-        if not frames:
-            logger.error("未生成任何幀文件")
-            return []
-
-        logger.info(f"成功提取 {len(frames)} 個幀")
-        return frames
+        # 收集結果
+        return _collect_extracted_frames(frames_dir, video_id)
 
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg 執行失敗: {str(e)}")
@@ -121,10 +233,18 @@ def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0)
         logger.error(f"提取幀時出錯: {str(e)}")
         return []
 
-# =============== 影片基本資訊擷取 ===============
 
-
+# ======================== 影片基本資訊擷取 ========================
 def get_video_info(video_path: str) -> Tuple[int, int, int, float]:
+    """
+    獲取影片基本資訊
+
+    Args:
+        video_path: 影片路徑
+
+    Returns:
+        Tuple[int, int, int, float]: (總幀數, 寬度, 高度, FPS)
+    """
     if not check_video_file(video_path):
         return 0, 0, 0, 0.0
 
@@ -143,24 +263,88 @@ def get_video_info(video_path: str) -> Tuple[int, int, int, float]:
     finally:
         cap.release()
 
-# =============== 幀尺寸調整 ===============
 
-
+# ======================== 幀尺寸調整 ========================
 def resize_frame(frame: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
+    """
+    調整幀尺寸
+
+    Args:
+        frame: 輸入幀
+        target_size: 目標尺寸 (寬度, 高度)
+
+    Returns:
+        np.ndarray: 調整後的幀
+    """
     return cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
 
-# =============== 幀預處理（灰階 + 模糊） ===============
 
-
+# ======================== 幀預處理（灰階 + 模糊） ========================
 def preprocess_frame(frame: np.ndarray) -> np.ndarray:
+    """
+    預處理幀：轉換為灰階並應用高斯模糊
+
+    Args:
+        frame: 輸入幀
+
+    Returns:
+        np.ndarray: 預處理後的幀
+    """
     gray: np.ndarray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred: np.ndarray = cv2.GaussianBlur(gray, (5, 5), 0)
     return blurred
 
-# =============== 關鍵幀擷取邏輯 ===============
+
+# ======================== 關鍵幀擷取邏輯 ========================
+def _is_keyframe(processed_frame: np.ndarray, prev_frame: np.ndarray, threshold: float) -> bool:
+    """
+    判斷是否為關鍵幀
+
+    Args:
+        processed_frame: 當前處理後的幀
+        prev_frame: 前一幀
+        threshold: 差異閾值
+
+    Returns:
+        bool: 是否為關鍵幀
+    """
+    if prev_frame is None:
+        return True
+
+    diff: np.ndarray = cv2.absdiff(processed_frame, prev_frame)
+    mean_diff: float = np.mean(diff)
+    return mean_diff > threshold
+
+
+def _save_keyframe(frame: np.ndarray, output_dir: str, frame_id: int) -> str:
+    """
+    保存關鍵幀
+
+    Args:
+        frame: 幀數據
+        output_dir: 輸出目錄
+        frame_id: 幀 ID
+
+    Returns:
+        str: 保存的檔案路徑
+    """
+    frame_path: str = os.path.join(output_dir, f"keyframe_{frame_id:04d}.jpg")
+    cv2.imwrite(frame_path, frame)
+    return frame_path
 
 
 def extract_keyframes(video_path: str, output_dir: str, threshold: float = 30.0) -> List[str]:
+    """
+    從影片中提取關鍵幀
+
+    Args:
+        video_path: 影片路徑
+        output_dir: 輸出目錄
+        threshold: 關鍵幀差異閾值
+
+    Returns:
+        List[str]: 關鍵幀檔案路徑列表
+    """
     if not check_video_file(video_path):
         return []
 
@@ -180,15 +364,10 @@ def extract_keyframes(video_path: str, output_dir: str, threshold: float = 30.0)
 
             processed_frame: np.ndarray = preprocess_frame(frame)
 
-            if prev_frame is not None:
-                diff: np.ndarray = cv2.absdiff(processed_frame, prev_frame)
-                mean_diff: float = np.mean(diff)
-
-                if mean_diff > threshold:
-                    frame_path: str = os.path.join(output_dir, f"keyframe_{frame_id:04d}.jpg")
-                    cv2.imwrite(frame_path, frame)
-                    keyframe_paths.append(frame_path)
-                    frame_id += 1
+            if _is_keyframe(processed_frame, prev_frame, threshold):
+                frame_path = _save_keyframe(frame, output_dir, frame_id)
+                keyframe_paths.append(frame_path)
+                frame_id += 1
 
             prev_frame = processed_frame
     except Exception as e:

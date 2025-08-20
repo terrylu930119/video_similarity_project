@@ -2,7 +2,7 @@ import csv
 import json
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import combinations
@@ -11,7 +11,7 @@ from sklearn.metrics import mean_absolute_error
 from scipy.stats import spearmanr
 import matplotlib.pyplot as plt
 
-# 導入你現有的模組
+
 from utils.downloader import download_video, generate_safe_filename
 from utils.logger import logger
 from core.audio_processor import chunkwise_dtw_sim, compute_audio_features, extract_audio, cos_sim, dtw_sim, chamfer_sim
@@ -83,38 +83,45 @@ class VideoDatasetProcessor:
 
         logger.info(f"群組分布: {group_counts}")
 
+    def _check_existing_video(self, record: VideoRecord) -> bool:
+        """檢查影片是否已存在"""
+        safe_filename = generate_safe_filename(record.url)
+        video_path = self.videos_dir / f"{safe_filename}.mp4"
+
+        if video_path.exists() and video_path.stat().st_size > 1024 * 1024:  # > 1MB
+            logger.info(f"影片已存在，跳過下載: {video_path}")
+            record.video_path = str(video_path)
+            record.download_success = True
+            return True
+        return False
+
+    def _download_single_video(self, record: VideoRecord, resolution: str) -> VideoRecord:
+        """下載單個影片"""
+        try:
+            # 檢查是否已存在
+            if self._check_existing_video(record):
+                return record
+
+            # 下載影片
+            downloaded_path = download_video(record.url, str(self.videos_dir), resolution)
+            record.video_path = downloaded_path
+            record.download_success = True
+            logger.info(f"下載成功: {record.url} -> {downloaded_path}")
+
+        except Exception as e:
+            logger.error(f"下載失敗 {record.url}: {str(e)}")
+            record.download_success = False
+
+        return record
+
     def download_videos(self, max_workers: int = 3, resolution: str = "720p") -> None:
         """批量下載影片"""
         logger.info("開始批量下載影片...")
 
-        def download_single_video(record: VideoRecord) -> VideoRecord:
-            try:
-                safe_filename = generate_safe_filename(record.url)
-                video_path = self.videos_dir / f"{safe_filename}.mp4"
-
-                # 檢查是否已存在
-                if video_path.exists() and video_path.stat().st_size > 1024 * 1024:  # > 1MB
-                    logger.info(f"影片已存在，跳過下載: {video_path}")
-                    record.video_path = str(video_path)
-                    record.download_success = True
-                    return record
-
-                # 下載影片
-                downloaded_path = download_video(record.url, str(self.videos_dir), resolution)
-                record.video_path = downloaded_path
-                record.download_success = True
-                logger.info(f"下載成功: {record.url} -> {downloaded_path}")
-
-            except Exception as e:
-                logger.error(f"下載失敗 {record.url}: {str(e)}")
-                record.download_success = False
-
-            return record
-
         # 並行下載
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_record = {
-                executor.submit(download_single_video, record): record
+                executor.submit(self._download_single_video, record, resolution): record
                 for record in self.video_records
             }
 
@@ -128,6 +135,39 @@ class VideoDatasetProcessor:
         success_count = sum(1 for r in self.video_records if r.download_success)
         logger.info(f"下載完成: {success_count}/{len(self.video_records)} 成功")
 
+    def _extract_audio_and_features(self, record: VideoRecord) -> VideoRecord:
+        """提取音頻和特徵"""
+        try:
+            # 提取音頻
+            audio_path = extract_audio(record.video_path)
+            record.audio_path = audio_path
+
+            # 提取特徵
+            features = compute_audio_features(audio_path)
+            if features:
+                # 保存特徵到文件
+                safe_filename = generate_safe_filename(record.url)
+                features_file = self.features_dir / f"{safe_filename}_features.json"
+
+                # 將 numpy 數組轉換為可序列化的格式
+                serializable_features = self._make_features_serializable(features)
+
+                with open(features_file, 'w') as f:
+                    json.dump(serializable_features, f)
+
+                record.features = features
+                record.feature_extraction_success = True
+                logger.info(f"特徵提取成功: {record.url}")
+            else:
+                logger.error(f"特徵提取失敗: {record.url}")
+                record.feature_extraction_success = False
+
+        except Exception as e:
+            logger.error(f"處理音頻失敗 {record.url}: {str(e)}")
+            record.feature_extraction_success = False
+
+        return record
+
     def extract_audio_features(self, max_workers: int = 2) -> None:
         """批量提取音頻特徵"""
         logger.info("開始批量提取音頻特徵...")
@@ -135,37 +175,7 @@ class VideoDatasetProcessor:
         def process_single_video(record: VideoRecord) -> VideoRecord:
             if not record.download_success or not record.video_path:
                 return record
-
-            try:
-                # 提取音頻
-                audio_path = extract_audio(record.video_path)
-                record.audio_path = audio_path
-
-                # 提取特徵
-                features = compute_audio_features(audio_path)
-                if features:
-                    # 保存特徵到文件
-                    safe_filename = generate_safe_filename(record.url)
-                    features_file = self.features_dir / f"{safe_filename}_features.json"
-
-                    # 將 numpy 數組轉換為可序列化的格式
-                    serializable_features = self._make_features_serializable(features)
-
-                    with open(features_file, 'w') as f:
-                        json.dump(serializable_features, f)
-
-                    record.features = features
-                    record.feature_extraction_success = True
-                    logger.info(f"特徵提取成功: {record.url}")
-                else:
-                    logger.error(f"特徵提取失敗: {record.url}")
-                    record.feature_extraction_success = False
-
-            except Exception as e:
-                logger.error(f"處理音頻失敗 {record.url}: {str(e)}")
-                record.feature_extraction_success = False
-
-            return record
+            return self._extract_audio_and_features(record)
 
         # 並行處理
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -197,24 +207,9 @@ class VideoDatasetProcessor:
                 serializable[key] = value
         return serializable
 
-    def generate_similarity_pairs(self,
-                                  same_group_similarity: float = 0.7,
-                                  different_group_similarity: float = 0.2,
-                                  max_pairs_per_group: int = 50) -> None:
-        """生成相似度對比對"""
-        logger.info("生成相似度對比對...")
-
-        # 只處理成功提取特徵的影片
-        successful_videos = [r for r in self.video_records if r.feature_extraction_success]
-
-        # 按群組分類
-        groups = {}
-        for record in successful_videos:
-            if record.group_label not in groups:
-                groups[record.group_label] = []
-            groups[record.group_label].append(record)
-
-        # 生成同組內的對比對（高相似度）
+    def _generate_same_group_pairs(self, groups: Dict[str, List[VideoRecord]],
+                                   same_group_similarity: float, max_pairs_per_group: int) -> None:
+        """生成同組內的相似度對比對"""
         for group_label, videos in groups.items():
             if len(videos) < 2:
                 continue
@@ -232,7 +227,9 @@ class VideoDatasetProcessor:
                     group_similarity="same_group"
                 ))
 
-        # 生成不同組間的對比對（低相似度）
+    def _generate_cross_group_pairs(self, groups: Dict[str, List[VideoRecord]],
+                                    different_group_similarity: float, max_pairs_per_group: int) -> None:
+        """生成不同組間的相似度對比對"""
         group_list = list(groups.keys())
         for i in range(len(group_list)):
             for j in range(i + 1, len(group_list)):
@@ -255,6 +252,29 @@ class VideoDatasetProcessor:
                         expected_similarity=different_group_similarity,
                         group_similarity="different_group"
                     ))
+
+    def generate_similarity_pairs(self,
+                                  same_group_similarity: float = 0.7,
+                                  different_group_similarity: float = 0.2,
+                                  max_pairs_per_group: int = 50) -> None:
+        """生成相似度對比對"""
+        logger.info("生成相似度對比對...")
+
+        # 只處理成功提取特徵的影片
+        successful_videos = [r for r in self.video_records if r.feature_extraction_success]
+
+        # 按群組分類
+        groups = {}
+        for record in successful_videos:
+            if record.group_label not in groups:
+                groups[record.group_label] = []
+            groups[record.group_label].append(record)
+
+        # 生成同組內的對比對（高相似度）
+        self._generate_same_group_pairs(groups, same_group_similarity, max_pairs_per_group)
+
+        # 生成不同組間的對比對（低相似度）
+        self._generate_cross_group_pairs(groups, different_group_similarity, max_pairs_per_group)
 
         logger.info(f"生成了 {len(self.similarity_pairs)} 個相似度對比對")
 
@@ -294,27 +314,37 @@ class WeightOptimizer:
             logger.error(f"自訂權重比對錯誤: {e}")
             return 0.0
 
-    def _custom_similarity_core(
-            self, f1: Dict[str, Any], f2: Dict[str, Any], weights: Dict[str, float]) -> float:
-        """核心比對邏輯：比對 f1、f2，並使用傳入的特徵權重表"""
+    def _process_onset_similarity(self, f1: Dict[str, Any], f2: Dict[str, Any],
+                                  weights: Dict[str, float]) -> Tuple[List[float], List[float]]:
+        """處理 onset 相似度"""
         scores, score_weights = [], []
 
-        def get_w(name): return weights.get(name, 1.0)
-
-        # onset
         if 'onset_env' in f1 and 'onset_env' in f2:
             s = dtw_sim(f1['onset_env'], f2['onset_env'])
             scores.append(s)
-            score_weights.append(get_w('onset_env'))
+            score_weights.append(weights.get('onset_env', 1.0))
+
+        return scores, score_weights
+
+    def _process_statistical_features(self, f1: Dict[str, Any], f2: Dict[str, Any],
+                                      weights: Dict[str, float]) -> Tuple[List[float], List[float]]:
+        """處理統計特徵相似度"""
+        scores, score_weights = [], []
 
         for k in ['mfcc', 'mfcc_delta', 'chroma']:
             for stat in ['mean', 'std']:
                 if k in f1 and k in f2 and stat in f1[k] and stat in f2[k]:
                     sim = cos_sim(f1[k][stat], f2[k][stat])**2
                     scores.append(sim)
-                    score_weights.append(get_w(f"{k}_{stat}"))
+                    score_weights.append(weights.get(f"{k}_{stat}", 1.0))
 
-        # tempo
+        return scores, score_weights
+
+    def _process_tempo_similarity(self, f1: Dict[str, Any], f2: Dict[str, Any],
+                                  weights: Dict[str, float]) -> Tuple[List[float], List[float]]:
+        """處理節奏相似度"""
+        scores, score_weights = [], []
+
         if 'tempo' in f1 and 'tempo' in f2:
             t1, t2 = f1['tempo'], f2['tempo']
             s1 = 1 / (1 + abs(t1['mean'] - t2['mean']) / 30)
@@ -322,15 +352,28 @@ class WeightOptimizer:
             s3 = 1 / (1 + abs(t1['range'] - t2['range']) / 30)
             sim = 0.5 * s1 + 0.25 * s2 + 0.25 * s3
             scores.append(sim)
-            score_weights.append(get_w('tempo'))
+            score_weights.append(weights.get('tempo', 1.0))
 
-        # OpenL3 chunkwise
+        return scores, score_weights
+
+    def _process_openl3_chunkwise(self, f1: Dict[str, Any], f2: Dict[str, Any],
+                                  weights: Dict[str, float]) -> Tuple[List[float], List[float]]:
+        """處理 OpenL3 chunkwise 相似度"""
+        scores, score_weights = [], []
+
         if 'openl3_features' in f1 and 'openl3_features' in f2:
             o1, o2 = f1['openl3_features'], f2['openl3_features']
             if isinstance(o1, dict) and 'chunkwise' in o1 and 'chunkwise' in o2:
                 sim = chunkwise_dtw_sim(o1['chunkwise'], o2['chunkwise'])
                 scores.append(sim)
-                score_weights.append(get_w('openl3_chunkwise'))
+                score_weights.append(weights.get('openl3_chunkwise', 1.0))
+
+        return scores, score_weights
+
+    def _process_deep_features(self, f1: Dict[str, Any], f2: Dict[str, Any],
+                               weights: Dict[str, float]) -> Tuple[List[float], List[float]]:
+        """處理深度特徵相似度"""
+        scores, score_weights = [], []
 
         for k in ['dl_features', 'pann_features', 'openl3_features']:
             v1, v2 = f1.get(k), f2.get(k)
@@ -353,14 +396,32 @@ class WeightOptimizer:
                     sim = cos_sim(v1.flatten(), v2.flatten())
 
                 scores.append(sim)
-                score_weights.append(get_w(k))
+                score_weights.append(weights.get(k, 1.0))
             except Exception as e:
                 logger.warning(f"特徵比對錯誤 [{k}]: {e}")
 
-        if not scores:
+        return scores, score_weights
+
+    def _custom_similarity_core(
+            self, f1: Dict[str, Any], f2: Dict[str, Any], weights: Dict[str, float]) -> float:
+        """核心比對邏輯：比對 f1、f2，並使用傳入的特徵權重表"""
+        all_scores, all_weights = [], []
+
+        # 處理各種特徵相似度
+        for scores, score_weights in [
+            self._process_onset_similarity(f1, f2, weights),
+            self._process_statistical_features(f1, f2, weights),
+            self._process_tempo_similarity(f1, f2, weights),
+            self._process_openl3_chunkwise(f1, f2, weights),
+            self._process_deep_features(f1, f2, weights)
+        ]:
+            all_scores.extend(scores)
+            all_weights.extend(score_weights)
+
+        if not all_scores:
             return 0.0
 
-        return float(np.average(scores, weights=score_weights))
+        return float(np.average(all_scores, weights=all_weights))
 
     def evaluate_weights(self, weights: Dict[str, float]) -> Dict[str, float]:
         """評估權重性能"""

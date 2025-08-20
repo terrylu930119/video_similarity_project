@@ -1,12 +1,11 @@
-# =============== 匯入與型別定義 ===============
+# core/similarity.py
 import os
 import torch
-from typing import List, Dict, Union, Optional, TypedDict, Callable, Tuple
-
 from utils.logger import logger
 from core.text_processor import text_similarity
 from core.audio_processor import audio_similarity
 from core.image_processor import video_similarity
+from typing import List, Dict, Union, Optional, TypedDict, Callable, Tuple
 
 
 # =============== 型別宣告 ===============
