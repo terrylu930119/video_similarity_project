@@ -2,15 +2,13 @@
 
 ## 專案簡介
 
-Video Similarity Project 是一套多模態的影片相似度比對與侵權偵測系統。它整合視覺、音訊、文字三方面的分析技術，以評估兩支影片內容的相似程度。透過深度學習模型與傳統演算法，本系統從畫面、聲音、語意多角度比較影片，協助使用者發現重複內容或潛在的侵權拷貝。 目前系統支援 YouTube、Bilibili 等主流影音平台的影片比對分析，未來可擴充至更多來源。
-
-
+Video Similarity Project 是一套多模態的影片相似度比對與侵權偵測系統。它整合視覺、音訊、文字三方面的分析技術，以評估兩支影片內容的相似程度。透過深度學習模型與傳統演算法，本系統從畫面、聲音、語意多角度比較影片，協助使用者發現重複內容或潛在的侵權拷貝。目前系統支援 YouTube、Bilibili 等主流影音平台的影片比對分析，未來可擴充至更多來源。
 
 ## 功能特點
 
 - **多模態分析**：同時分析影片的畫面、音訊和字幕內容，提高比對準確度。
   - 視覺分析：提取影片關鍵影格，計算感知哈希 (pHash) 和深度特徵向量，比較畫面內容的相似性。
-  - 音頻分析：擷取音訊梅爾頻譜、MFCC 等特徵，以及預訓練模型嵌入向量（OpenL3、PANN），比對音軌的相似性（如背景音樂、講話聲）。。
+  - 音頻分析：擷取音訊梅爾頻譜、MFCC 等特徵，以及預訓練模型嵌入向量（OpenL3、PANN），比對音軌的相似性（如背景音樂、講話聲）。
   - 文本分析：利用 Faster-Whisper 將講話聲音轉寫為文本，再用 SentenceTransformer 算出語意相似度，比較影片主題內容的一致性。
 
 - **影片下載與處理**：內建多平台下載模組，使用 yt-dlp 下載 YouTube/Bilibili 影片。可自訂下載解析度 (預設 720p)，並自動抽取影格進行分析。下載採用快取機制，已下載或處理過的影片會直接重用結果，節省時間。長影片則支援智能採樣，避免處理過載。
@@ -19,87 +17,157 @@ Video Similarity Project 是一套多模態的影片相似度比對與侵權偵�
 
 - **相似度評估報告**：輸出包含各模態詳細分數以及整體相似度分數的分析報告。當某模態（特別是文本內容）無意義或失敗時，系統會自動降低其權重，並在結果中標註說明，以確保綜合分數的可靠性和可解讀性。
 
-
-
-
 ## 技術架構
 
 專案採用前後端分離的模組化架構，主要組成部分如下：
 
-- **前端 (frontend)**  
-  基於 Vue3 + Vite 開發的單頁應用 (SPA)。用戶在瀏覽器輸入影片 URL 並發起比對請求，透過 AJAX 與後端 API 互動，並使用 Server-Sent Events (SSE) 即時接收進度更新。  
-  介面包含輸入控制面板、任務佇列列表、結果顯示區三部分，支援響應式更新。
+### **前端 (frontend)**
+基於 Vue3 + Vite 開發的單頁應用 (SPA)，採用 Composition API 和組合式函數架構：
 
-- **後端 API (backend)**  
-  使用 FastAPI 架構的 RESTful API 服務：  
-  - `/api/compare`：接收比對請求，返回任務 ID 並啟動比對流程。  
-  - `/api/events`：提供 SSE 端點，持續推送進度與結果。  
-  - `/api/status`：查詢本地快取進度，用於顯示已完成的部分處理結果。  
-  採用 `sse-starlette` 實現 SSE 推送機制。
+- **核心組件**：
+  - `App.vue`：主應用程式組件，整合所有子組件並管理全域狀態
+  - `InputPanel.vue`：影片輸入與參數設定面板
+  - `QueuePanel.vue`：任務佇列管理與進度追蹤
+  - `ResultsGrid.vue`：比對結果網格顯示
+  - `ProgressBar.vue`：進度條組件，支援平滑動畫
+  - `ChipList.vue`：影片標籤列表管理
+  - `LogViewer.vue`：日誌查看器，支援自動滾動
 
-- **比對流程 (cli/main.py)**  
-  後端接收請求後，啟動 CLI 子程序執行比對任務，協調多個核心模組完成影片下載、音訊提取、轉錄與多模態相似度計算，最後輸出 JSON 結果。
+- **組合式函數**：
+  - `useCompare.js`：影片比對核心邏輯，管理任務生命週期、狀態同步、事件處理
+  - `useVideoId.js`：影片ID處理工具，支援多平台URL解析和標籤生成
 
-- **影像處理 (core/image_processor.py)**  
-  提取影像特徵並計算相似度，包括感知哈希與深度特徵嵌入，採用雙階段法比較影片畫面相似度。
+- **服務層**：
+  - `api.js`：HTTP API 通訊服務，封裝所有後端請求
+  - `sse.js`：Server-Sent Events 服務，處理實時進度更新
 
-- **音訊處理 (core/audio_processor.py)**  
-  將影片轉為 WAV 音訊，提取 MFCC、色譜、節奏等傳統特徵，以及 OpenL3、PANN 深度音訊特徵，計算音訊相似度分數。
+- **樣式系統**：
+  - `app.css`：主要樣式表，包含組件樣式、佈局、響應式設計
+  - `variables.css`：CSS 變數定義，統一管理色彩主題和設計系統
 
-- **文字處理 (core/text_processor.py)**  
-  使用 Faster-Whisper 轉錄音訊為中英文文字，再用 SentenceTransformer 計算字幕語意相似度。
+### **後端 API (backend)**
+使用 FastAPI 架構的 RESTful API 服務：
 
-- **相似度融合 (core/similarity.py)**  
-  將音訊、影像、文字三種相似度加權融合為綜合分數，權重可配置，並會在文字資訊不足時動態調整比例。
+- **主要端點**：
+  - `POST /api/compare`：接收比對請求，返回任務 ID 並啟動比對流程
+  - `GET /api/events`：提供 SSE 端點，持續推送進度與結果
+  - `POST /api/status`：查詢本地快取進度，用於顯示已完成的部分處理結果
+  - `POST /api/cancel`：取消正在執行的比對任務
 
-- **日誌與依賴管理 (utils/)**  
-  - `logger.py`：設定全域日誌格式，統一控制台與檔案輸出。  
-  - `dependencies.py`：啟動時檢查 ffmpeg、yt-dlp、CUDA 等關鍵環境。  
-  - 其他工具如 `downloader.py` (影片下載與安全檔名生成)、`video_utils.py` (影片抽幀與資訊獲取)。
+- **核心服務**：
+  - `compare_api.py`：API 路由定義和請求驗證
+  - `compare_service.py`：比對執行服務，管理子進程、日誌解析、事件推送
 
+### **比對流程 (cli/main.py)**
+後端接收請求後，啟動 CLI 子程序執行比對任務，協調多個核心模組完成影片下載、音訊提取、轉錄與多模態相似度計算，最後輸出 JSON 結果。
 
+### **核心算法模組 (core/)**
+- **影像處理** (`image_processor.py`)：提取影像特徵並計算相似度，包括感知哈希與深度特徵嵌入，採用雙階段法比較影片畫面相似度
+- **音訊處理** (`audio_processor.py`)：將影片轉為 WAV 音訊，提取 MFCC、色譜、節奏等傳統特徵，以及 OpenL3、PANN 深度音訊特徵，計算音訊相似度分數
+- **文字處理** (`text_processor.py`)：使用 Faster-Whisper 轉錄音訊為中英文文字，再用 SentenceTransformer 計算字幕語意相似度
+- **相似度融合** (`similarity.py`)：將音訊、影像、文字三種相似度加權融合為綜合分數，權重可配置，並會在文字資訊不足時動態調整比例
+
+### **工具模組 (utils/)**
+- `logger.py`：設定全域日誌格式，統一控制台與檔案輸出
+- `dependencies.py`：啟動時檢查 ffmpeg、yt-dlp、CUDA 等關鍵環境
+- `downloader.py`：影片下載與安全檔名生成
+- `video_utils.py`：影片抽幀與資訊獲取
 
 ## 專案結構
 
 ```
 video_similarity_project/
-├── frontend/              # 前端 Vue3 專案
+├── frontend/                          # 前端 Vue3 專案
 │   ├── src/
-│   │   ├── components/    # 拆分後的子元件 (ControlPanel.vue, TaskQueue.vue, ResultsList.vue 等)
-│   │   ├── App.vue        # 前端主元件，掛載子元件並維護全域狀態
-│   │   └── main.js        # Vue 應用入口
-│   └── ...               (設定檔與靜態資源等)
-├── backend/
-│   ├── main.py            # FastAPI 應用啟動與路由掛載
+│   │   ├── components/               # Vue 組件
+│   │   │   ├── App.vue              # 主應用程式組件
+│   │   │   ├── InputPanel.vue       # 影片輸入與參數設定
+│   │   │   ├── QueuePanel.vue       # 任務佇列管理
+│   │   │   ├── ResultsGrid.vue      # 比對結果顯示
+│   │   │   ├── ProgressBar.vue      # 進度條組件
+│   │   │   ├── ChipList.vue         # 影片標籤列表
+│   │   │   └── LogViewer.vue        # 日誌查看器
+│   │   ├── composables/             # 組合式函數
+│   │   │   ├── useCompare.js        # 影片比對核心邏輯
+│   │   │   └── useVideoId.js        # 影片ID處理工具
+│   │   ├── services/                 # 服務層
+│   │   │   ├── api.js               # HTTP API 服務
+│   │   │   └── sse.js               # Server-Sent Events 服務
+│   │   ├── styles/                   # 樣式檔案
+│   │   │   ├── app.css              # 主要樣式表
+│   │   │   └── variables.css        # CSS 變數定義
+│   │   ├── App.vue                  # 主組件
+│   │   └── main.js                  # Vue 應用入口
+│   ├── index.html                    # HTML 入口檔案
+│   └── package.json                  # 前端依賴配置
+├── backend/                          # 後端 FastAPI 服務
+│   ├── main.py                      # FastAPI 應用啟動與路由掛載
 │   └── api/
-│       ├── compare_api.py     # API 路由定義 (比對啟動、事件、狀態、取消)
-│       └── compare_service.py # 比對執行服務 (子進程管理、日誌解析、事件推送)
-├── core/                  # 後端核心算法模組
-│   ├── image_processor.py    
-│   ├── audio_processor.py
-│   ├── text_processor.py
-│   └── similarity.py 
-├── utils/                 # 工具模組
-│   ├── downloader.py          # 影片下載工具 (使用 yt-dlp)
-│   ├── video_utils.py         # 視頻資訊獲取與影格處理
-│   ├── logger.py              # 日誌設定
-│   └── dependencies.py        # 執行環境/依賴檢查
-├── cli/
-│   └── main.py            # 命令列執行主程式 (多線程協調各模組完成比對流程)
-├── downloads/             # 影片下載及中間檔案輸出目錄 (程式執行後生成)
-│   ├── audio/                 # 提取的音訊檔 (.wav)
-│   ├── frames/                # 抽取的影格圖像
+│       ├── compare_api.py           # API 路由定義
+│       └── compare_service.py       # 比對執行服務
+├── core/                             # 後端核心算法模組
+│   ├── image_processor.py           # 影像處理與特徵提取
+│   ├── audio_processor.py           # 音訊處理與特徵分析
+│   ├── text_processor.py            # 文本轉錄與語意分析
+│   └── similarity.py                # 多模態相似度融合
+├── utils/                            # 工具模組
+│   ├── downloader.py                # 影片下載工具
+│   ├── video_utils.py               # 影片處理工具
+│   ├── logger.py                    # 日誌管理
+│   └── dependencies.py              # 環境依賴檢查
+├── cli/                              # 命令列介面
+│   └── main.py                      # CLI 主程式
+├── downloads/                        # 影片下載及中間檔案輸出目錄
+│   ├── audio/                       # 提取的音訊檔 (.wav)
+│   ├── frames/                      # 抽取的影格圖像
 │   └── (各影片 *.mp4, *_transcript.txt/.json 等)
-├── feature_cache/         # 特徵快取資料夾 (如音訊特徵向量 .npz)
-├── requirements.txt       # Python 相依套件清單 
-├── install_dependencies.py    # 一鍵安裝腳本 
-├── start_project.py           # 開發用啟動腳本 (同時啟動後端與前端開發伺服器)
-├── README.md               # 說明文件 (本檔案)
+├── feature_cache/                    # 特徵快取資料夾
+├── requirements.txt                  # Python 相依套件清單
+├── install_dependencies.py           # 一鍵安裝腳本
+├── start_project.py                  # 開發用啟動腳本
+├── FRONTEND_API_GUIDE.md            # 前端 API 整合指導文件
+├── README.md                         # 專案說明文件
 ├── .gitignore
-└── www.youtube.com_cookies.txt  # 下載器 cookies（如有需求）
+└── www.youtube.com_cookies.txt      # 下載器 cookies（如有需求）
 ```
 
+## 前端架構詳解
 
+### **組件架構**
+前端採用模組化組件設計，每個組件都有明確的職責：
+
+- **`App.vue`**：作為應用程式的根組件，整合所有子組件並管理全域狀態
+- **`InputPanel.vue`**：處理用戶輸入，包括參考影片、目標影片列表、參數設定等
+- **`QueuePanel.vue`**：管理任務佇列，顯示執行進度、狀態資訊、日誌查看等
+- **`ResultsGrid.vue`**：以網格形式展示比對結果，支援分數顏色編碼和詳細資訊顯示
+- **`ProgressBar.vue`**：提供進度視覺化，支援平滑動畫和不同尺寸
+- **`ChipList.vue`**：管理影片標籤，支援添加、移除、去重等操作
+- **`LogViewer.vue`**：顯示任務執行日誌，支援自動滾動和格式保持
+
+### **狀態管理**
+使用 Vue3 Composition API 和自定義組合式函數進行狀態管理：
+
+- **`useCompare.js`**：核心狀態管理，包含：
+  - 表單狀態（參考影片、目標影片、參數等）
+  - 執行狀態（任務佇列、進度、結果等）
+  - 業務邏輯（任務提交、取消、狀態同步等）
+  - 事件處理（SSE 連接、進度更新、結果處理等）
+
+- **`useVideoId.js`**：影片處理工具，提供：
+  - 影片標籤生成
+  - 影片ID提取
+  - 階段狀態轉換
+
+### **通訊架構**
+- **HTTP API**：使用 `api.js` 封裝所有後端請求
+- **實時通訊**：使用 `sse.js` 處理 Server-Sent Events
+- **錯誤處理**：完整的錯誤處理機制和用戶回饋
+
+### **樣式系統**
+- **設計主題**：深色主題，保護眼睛，適合長時間使用
+- **響應式設計**：支援各種螢幕尺寸，從手機到桌面
+- **動畫效果**：平滑的過渡動畫、進度條動畫、懸停效果
+- **自定義滾軸**：統一的滾軸樣式，與整體設計風格一致
 
 ## 安裝與環境需求
 
@@ -130,9 +198,6 @@ video_similarity_project/
 
 注意：首次執行比對程式時，程式會自動下載所需的機器學習模型（Whisper 等，約數百MB至1GB），請確保網路通暢。
 
-
-
-
 ## 使用方式
 
 安裝完成後，可通過命令列介面使用本工具：
@@ -142,10 +207,11 @@ video_similarity_project/
 ```bash
 python start_project.py
 ```
+
 ### IDE用法：
-在虛擬環境的終端執行 `cli/main.py` 並提供參考影片和一個或多個要比對的影片連結：
+在虛擬環境的終端執行 `cli/main.py` 並在 `_setup_default_args` 函式裡設定回傳的 `--ref` 和 `--comp` 等相關參數:
 ```bash
-python -m cli.main --ref <參考影片網址> --comp <待比對影片網址1> <待比對影片網址2> ... [選項]
+python -m cli.main
 ```
 
 ### CLI用法：
@@ -180,8 +246,6 @@ https://www.bilibili.com/video/BVXXXXX...                    0.6578       0.7012
 ------------------------------------------------------------------------------------------------------------
 註: * 表示該影片的文本內容被判定為無意義，其文本相似度權重已被重新分配到音訊和畫面相似度
 ```
-
-
 
 ### 相似度分數解讀指引（音頻 × 畫面 × 文本）
 
@@ -228,8 +292,6 @@ https://www.bilibili.com/video/BVXXXXX...                    0.6578       0.7012
 
 > **註**：分數僅供參考，實際判斷仍需結合影片內容與人工審查。
 
-
-
 ## 資料夾與模組說明
 
 - **downloads/**：預設的影片下載及處理輸出目錄。執行比對時，下載的原始影片文件、擷取的幀圖片、轉錄的字幕文字等都儲存在此資料夾下（按照影片ID區分子目錄）。如果不加 --keep 參數，程式在完成後會自動清理此資料夾。
@@ -242,7 +304,7 @@ https://www.bilibili.com/video/BVXXXXX...                    0.6578       0.7012
   - text_processor.py：文本處理模組，音訊轉錄（Faster-Whisper）與文本相似度計算（Sentence-Transformers）。
   - similarity.py：相似度融合模組，音訊、影像、文本三模態加權融合為總分。
 
-- **utils/**：共用工具模組 ：
+- **utils/**：共用工具模組：
   - downloader.py：影片下載與命名工具，使用 yt-dlp 下載影片並生成安全檔名。
   - video_utils.py：視頻相關工具，抽幀、影片資訊取得、格式驗證等。
   - audio_cleaner.py：音訊預處理工具，音訊預處理（去靜音、降噪）。
@@ -255,9 +317,12 @@ https://www.bilibili.com/video/BVXXXXX...                    0.6578       0.7012
   - main.py：FastAPI 應用入口。
 
 - **frontend/src**：Vue3 前端程式碼：
-  - components/：拆分後的子元件（控制面板、任務佇列、結果列表等）。
-  - App.vue：前端主元件，維護全域狀態與 SSE 事件處理。
-  - main.js：Vue 應用入口
+  - components/：Vue 組件，包括輸入面板、任務佇列、結果顯示、進度條、標籤列表、日誌查看器等。
+  - composables/：組合式函數，包括影片比對核心邏輯和影片ID處理工具。
+  - services/：服務層，包括 HTTP API 服務和 Server-Sent Events 服務。
+  - styles/：樣式檔案，包括主要樣式表和 CSS 變數定義。
+  - App.vue：前端主元件，整合所有子組件並管理全域狀態。
+  - main.js：Vue 應用入口。
 
 - **panns_inference/**：內含預訓練環境音分類模型（PANN: Pretrained Audio Neural Networks）的相關程式碼。本專案使用其中的 Cnn14 模型來提取音訊的環境聲音特徵向量，用於輔助音訊相似度計算。該資料夾下包括模型定義、權重下載/載入以及推理所需的工具程式。
 
@@ -265,9 +330,28 @@ https://www.bilibili.com/video/BVXXXXX...                    0.6578       0.7012
 - requirements.txt：Python 依賴套件清單（FastAPI、PyTorch、yt-dlp、faster-whisper 等）。
 - install_dependencies.py：一鍵安裝腳本，涵蓋後端、前端依賴與外部工具安裝。
 - start_project.py：Windows 一鍵啟動前後端開發伺服器。
-- README.md：專案說明文件（本檔案）。
-- LICENSE：授權協議（預設 MIT）。
+- FRONTEND_API_GUIDE.md：前端 API 整合指導文件，詳細說明如何與後端 API 進行整合。
+- README.md：專案說明文件。
+- LICENSE：授權協議。
 
+## 開發指南
+
+### **前端開發**
+- 使用 Vue3 Composition API 和 `<script setup>` 語法
+- 組件採用單一職責原則，每個組件都有明確的功能
+- 使用組合式函數管理複雜的業務邏輯
+- 樣式採用 CSS 變數系統，便於主題切換和維護
+
+### **後端開發**
+- 使用 FastAPI 框架，支援自動 API 文件生成
+- 採用異步處理，支援高併發請求
+- 使用 Pydantic 進行資料驗證和序列化
+- 實作完整的錯誤處理和日誌記錄
+
+### **API 整合**
+- 詳細的 API 整合指導請參考 `FRONTEND_API_GUIDE.md`
+- 支援 Server-Sent Events 實時通訊
+- 完整的錯誤處理和狀態管理
 
 ## 授權條款 
 
