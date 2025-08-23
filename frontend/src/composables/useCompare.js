@@ -224,7 +224,14 @@ export function useCompare() {
                     const hint = (typeof e.overallHint === 'number') ? Math.round(e.overallHint * 100) : null
                     const p = Number.isFinite(+e.percent) ? +e.percent : (t.progress || 0)
                     const np = (hint ?? p)
-                    t.progress = Math.max(Number(t.progress || 0), np)
+
+                    // 平滑進度更新：避免進度倒退，除非是階段變更
+                    const currentProgress = t.progress || 0
+                    if (np >= currentProgress || e.phase !== t.currentPhase) {
+                        t.progress = np
+                        t.currentPhase = e.phase
+                    }
+
                     // 狀態優先吃後端 phaseName（例如「字幕解析」「音訊處理」）
                     if (e.phaseName) t.status = `${e.phaseName} ${t.progress}%`
                     else t.status = humanPhase(e.phase, t.progress)
@@ -291,7 +298,18 @@ export function useCompare() {
 
         const refTaskId = 'ref-' + videoId(refUrl.value)
         const refDisplay = labelFor(refUrl.value)
-        tasks.push({ id: refTaskId, url: refUrl.value, ref: refUrl.value, isRef: true, progress: 0, status: '佇列中', log: [], showLog: false, display: refDisplay })
+        tasks.push({
+            id: refTaskId,
+            url: refUrl.value,
+            ref: refUrl.value,
+            isRef: true,
+            progress: 0,
+            status: '佇列中',
+            currentPhase: 'queued',
+            log: [],
+            showLog: false,
+            display: refDisplay
+        })
 
         await preloadStatus()
 
@@ -310,8 +328,25 @@ export function useCompare() {
                     const vid = videoId(url)
                     const exist = tasks.find(x => !x.isRef && videoId(x.url) === vid)
                     const display = labelFor(url)
-                    if (exist) { exist.id = task_id; exist.ref = ref_url; exist.display = display; if (!exist.status) exist.status = '佇列中' }
-                    else tasks.push({ id: task_id, url, ref: ref_url, isRef: false, progress: 0, status: '佇列中', log: [], showLog: false, display })
+                    if (exist) {
+                        exist.id = task_id;
+                        exist.ref = ref_url;
+                        exist.display = display;
+                        if (!exist.status) exist.status = '佇列中'
+                        if (!exist.currentPhase) exist.currentPhase = 'queued'
+                    }
+                    else tasks.push({
+                        id: task_id,
+                        url,
+                        ref: ref_url,
+                        isRef: false,
+                        progress: 0,
+                        status: '佇列中',
+                        currentPhase: 'queued',
+                        log: [],
+                        showLog: false,
+                        display
+                    })
                 })
                 running.value = true
                 connectEvents()
