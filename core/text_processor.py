@@ -524,7 +524,7 @@ def _load_cached_transcript(transcript_path: str, task_id: Optional[str]) -> Opt
         # 判斷來源字樣，對前端發 45%「文本就緒（快取）」訊息
         if task_id:
             src = "字幕" if cached.startswith("來源：字幕文件") else "轉錄"
-            emit("progress", task_id=task_id, phase="transcribe", percent=45, msg=f"文本就緒（快取，{src})")
+            emit("progress", task_id=task_id, phase="extract", percent=45, msg=f"文本就緒（快取，{src})")
 
         return cached, lang
     except Exception as e:
@@ -669,7 +669,7 @@ def _try_subtitle_extraction(video_url: str, output_dir: str, preferred_lang: Op
 
         # 告知前端：這次是「找到字幕」→ 文本完成
         if task_id:
-            emit("progress", task_id=task_id, phase="transcribe", percent=45, msg="字幕就緒")
+            emit("progress", task_id=task_id, phase="extract", percent=45, msg="字幕就緒")
 
         return sub_txt, sub_lang
     return None
@@ -744,7 +744,7 @@ def transcribe_audio(audio_path: str, video_url: Optional[str] = None, output_di
         f"轉錄完成，共成功 {len(transcripts)} 段，語言分布: {dict(Counter(seg_langs)) if seg_langs else {}}，最多語言: {most_common_lang}")
 
     if task_id:
-        emit("progress", task_id=task_id, phase="transcribe", percent=45, msg="轉錄完成")
+        emit("progress", task_id=task_id, phase="extract", percent=45, msg="轉錄完成")
 
     final_txt = " ".join([t.strip() for t in transcripts if len(t.strip()) >= 5])
     return final_txt, most_common_lang
