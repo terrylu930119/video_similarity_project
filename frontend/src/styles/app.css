@@ -1,132 +1,246 @@
-/* ========== Reset & Base ========== */
+/* =============== 影片相似度比對系統 - 主要樣式表 =============== */
+/* 功能：提供整個應用程式的視覺設計和佈局樣式 */
+
+/* =============== 全域滾軸樣式（Global Scrollbar Styling） =============== */
+/* 設定整個網頁右側滾軸的外觀 */
+
+/* WebKit 瀏覽器滾軸樣式（Chrome、Safari、Edge） */
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+    width: 12px;
+    /* 滾軸寬度 */
+}
+
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track {
+    background: var(--panel-2);
+    /* 滾軸軌道背景色 */
+    border-radius: 6px;
+}
+
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb {
+    background: var(--border);
+    /* 滾軸滑塊顏色 */
+    border-radius: 6px;
+    border: 2px solid var(--panel-2);
+    /* 滑塊邊框 */
+}
+
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover {
+    background: var(--primary);
+    /* 懸停時的顏色 */
+}
+
+/* Firefox 瀏覽器滾軸樣式 */
+html,
+body {
+    scrollbar-width: thin;
+    /* 細滾軸 */
+    scrollbar-color: var(--border) var(--panel-2);
+    /* 滑塊顏色 軌道顏色 */
+}
+
+/* =============== Reset & Base（重置與基礎樣式） =============== */
+/* 統一所有元素的盒模型計算方式 */
 * {
     box-sizing: border-box;
 }
 
+/* 基礎頁面樣式設定 */
 html,
 body {
     margin: 0;
     padding: 0;
     background: #0a0d11;
-    color: #e7ecf4;
+    /* 深色背景 */
+    color: #e2e8f0;
+    /* 主要文字顏色 */
     font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "PingFang TC", "Noto Sans TC", Segoe UI, Roboto, Helvetica, Arial;
     overflow-x: hidden;
+    /* 防止水平滾動 */
 }
 
-/* ========== Layout ========== */
+/* =============== Layout（佈局系統） =============== */
+/* 主要容器：限制最大寬度並置中 */
 .container {
     max-width: 1100px;
     margin: 40px auto;
     padding: 0 20px;
 }
 
+/* 網格佈局系統 */
 .grid {
     display: grid;
     gap: 16px;
 }
 
+/* 響應式雙欄佈局：在960px以上時啟用 */
 @media (min-width: 960px) {
     .grid-2 {
         grid-template-columns: 1.2fr .8fr;
+        /* 左欄稍寬，右欄稍窄 */
     }
 }
 
+/* 水平排列容器 */
 .row {
     display: flex;
     gap: 10px;
     align-items: center;
     white-space: nowrap;
+    /* 防止文字換行 */
 }
 
-/* ========== Typography ========== */
+/* =============== Typography（文字排版） =============== */
+/* 主標題樣式 */
 .title {
     font-size: 28px;
     font-weight: 800;
     letter-spacing: .2px;
     margin: 0 0 6px;
+    color: #f8fafc;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    /* 陰影效果 */
 }
 
+/* 副標題樣式 */
 .subtitle {
     color: var(--muted);
     margin: 0 0 20px;
+    line-height: 1.6;
 }
 
+/* 表單標籤樣式 */
 label {
     display: block;
     margin: 10px 0 6px;
     font-weight: 600;
+    color: #e2e8f0;
 }
 
+/* 提示文字樣式 */
 .hint {
     color: var(--muted);
     font-size: 13px;
 }
 
+/* 微小文字樣式 */
 .tiny {
-    color: #aeb7c6;
+    color: #94a3b8;
     font-size: 12px;
 }
 
-/* ========== Form Controls ========== */
+/* =============== Form Controls（表單控制項） =============== */
+/* 文字輸入框、文字區域、下拉選單的統一樣式 */
 input[type=text],
 textarea,
 select {
     width: 100%;
     background: var(--panel-2);
     border: 1px solid var(--border);
-    color: #e8eef7;
-    border-radius: 10px;
-    padding: 10px 12px;
+    color: #e2e8f0;
+    border-radius: 8px;
+    padding: 12px 14px;
     outline: none;
+    font-size: 14px;
+    transition: all 0.2s ease;
+    /* 平滑過渡動畫 */
+
+    /* 移除瀏覽器原生樣式 */
+    -webkit-appearance: none;
+    /* Chrome / Safari */
+    -moz-appearance: none;
+    /* Firefox */
+    appearance: none;
+
+    /* 確保背景色正確顯示 */
+    background-color: var(--panel-2);
 }
 
+/* 表單控制項聚焦狀態樣式 */
+input[type=text]:focus,
+textarea:focus,
+select:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    /* 聚焦時的藍色光暈 */
+    background: #0c0f14;
+}
+
+/* 文字區域特殊樣式 */
 textarea {
     min-height: 90px;
     resize: vertical;
+    /* 只允許垂直調整大小 */
 }
 
-/* ========== Buttons ========== */
+/* =============== Buttons（按鈕樣式） =============== */
+/* 按鈕容器：水平排列多個按鈕 */
 .btns {
     display: flex;
     gap: 8px;
 }
 
+/* 基礎按鈕樣式 */
 .btn {
-    background: #171b22;
+    background: var(--panel-2);
     border: 1px solid var(--border);
-    padding: 8px 12px;
-    border-radius: 10px;
-    color: #dfe6f2;
+    padding: 10px 16px;
+    border-radius: 8px;
+    color: #e2e8f0;
+    font-weight: 500;
     cursor: pointer;
+    transition: all 0.2s ease;
+    /* 平滑過渡動畫 */
+    font-size: 14px;
 }
 
+/* 按鈕懸停效果 */
 .btn:hover {
-    background: #1a2029;
+    background: var(--panel);
+    border-color: var(--primary);
+    transform: translateY(-1px);
+    /* 輕微上移效果 */
 }
 
+/* 主要按鈕樣式（藍色主題） */
 .btn.primary {
-    background: linear-gradient(180deg, #24364a, #1a2838);
-    border-color: #2f3a4a;
-    color: #eaf2ff;
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
 }
 
+/* 主要按鈕懸停效果 */
+.btn.primary:hover {
+    background: var(--primary-dark);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+    /* 懸停時的陰影效果 */
+}
+
+/* 小尺寸按鈕 */
 .btn.small {
     font-size: 12px;
     padding: 6px 10px;
 }
 
-/* ========== Checkbox ========== */
+/* =============== Checkbox（核取方塊） =============== */
+/* 核取方塊容器樣式 */
 .checkbox {
     display: flex;
     gap: 8px;
     align-items: center;
 }
 
+/* 小尺寸核取方塊 */
 .checkbox.small {
     font-size: 12px;
 }
 
-/* ========== Chips ========== */
+/* =============== Chips（影片標籤） =============== */
+/* 影片標籤容器：支援換行排列 */
 .chips {
     display: flex;
     flex-wrap: wrap;
@@ -134,45 +248,66 @@ textarea {
     margin-top: 8px;
 }
 
+/* 單個影片標籤樣式 */
 .chip {
     display: flex;
     gap: 6px;
     align-items: center;
-    background: #0e1217;
+    background: var(--panel-2);
     border: 1px solid var(--border);
-    border-radius: 999px;
-    padding: 6px 10px;
+    border-radius: 20px;
+    /* 圓角設計 */
+    padding: 6px 12px;
+    transition: all 0.2s ease;
 }
 
+/* 影片標籤懸停效果 */
+.chip:hover {
+    background: var(--panel);
+    border-color: var(--primary);
+}
+
+/* 影片標籤文字樣式 */
 .chip-text {
     font-size: 12px;
-    color: #d9e2ef;
+    color: #cbd5e1;
 }
 
+/* 移除按鈕樣式 */
 .chip .x {
     cursor: pointer;
-    opacity: .7;
+    opacity: .6;
+    transition: opacity 0.2s ease;
+    color: #94a3b8;
 }
 
+/* 移除按鈕懸停效果 */
 .chip .x:hover {
     opacity: 1;
+    color: #ef4444;
+    /* 懸停時變為紅色 */
 }
 
-/* ========== Cards ========== */
+/* =============== Cards（卡片容器） =============== */
+/* 通用卡片樣式：用於內容分組 */
 .card {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 18px;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, .2);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    transition: all 0.2s ease;
 }
 
+/* 卡片標題樣式 */
 .card h3 {
     margin: 0 0 12px;
     font-size: 18px;
+    color: #f1f5f9;
 }
 
-/* ========== Task Queue ========== */
+/* =============== Task Queue（任務佇列） =============== */
+/* 任務網格佈局：響應式卡片排列 */
 .task-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -180,14 +315,23 @@ textarea {
     align-content: start;
 }
 
+/* 單個任務項目樣式 */
 .queue-item {
-    background: #0c1015;
+    background: var(--panel-2);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 10px;
+    border-radius: 10px;
+    padding: 12px;
     margin-bottom: 10px;
+    transition: all 0.2s ease;
 }
 
+/* 任務項目懸停效果 */
+.queue-item:hover {
+    border-color: var(--primary);
+    background: var(--panel);
+}
+
+/* 任務標題區域：URL和狀態資訊 */
 .q-head {
     display: flex;
     justify-content: space-between;
@@ -195,83 +339,101 @@ textarea {
     margin-bottom: 8px;
 }
 
+/* 任務URL顯示 */
 .q-url {
     font-weight: 600;
     max-width: 70%;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* 文字過長時顯示省略號 */
     white-space: nowrap;
+    color: #e2e8f0;
 }
 
+/* 任務右側狀態資訊 */
 .q-right {
     color: var(--muted);
 }
 
+/* 狀態標籤樣式 */
 .tag {
-    font-size: 12px;
+    font-size: 11px;
     padding: 2px 6px;
     margin-left: 6px;
-    border-radius: 999px;
+    border-radius: 12px;
     border: 1px solid #d1d5db;
     background: #f9fafb;
     color: #374151;
+    transition: all 0.2s ease;
 }
 
+/* 警告狀態標籤 */
 .tag.warn {
-    border-color: #f59e0b;
+    border-color: var(--warning);
     color: #92400e;
-    background: #fffbeb;
+    background: #fef3c7;
 }
 
-/* 捲軸容器 */
+/* =============== 滾軸樣式（Scrollbar Styling） =============== */
+/* 任務滾動容器：限制高度並啟用滾動 */
 .task-scroll {
     max-height: 60vh;
     overflow: auto;
     padding-right: 8px;
     scrollbar-gutter: stable both-edges;
+    /* 防止滾軸出現時佈局跳動 */
 }
 
-/* WebKit Scrollbar */
+/* WebKit 瀏覽器滾軸樣式（Chrome、Safari、Edge） */
 .task-scroll::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
 }
 
 .task-scroll::-webkit-scrollbar-track {
-    background: #0d1218;
-    border-radius: 12px;
+    background: var(--panel-2);
+    border-radius: 8px;
 }
 
 .task-scroll::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, #2a3342, #3b475d);
-    border-radius: 12px;
-    border: 2px solid #0d1218;
+    background: var(--border);
+    border-radius: 8px;
 }
 
 .task-scroll::-webkit-scrollbar-thumb:hover {
-    background: #485673;
+    background: var(--primary);
 }
 
-/* Firefox Scrollbar */
+/* Firefox 瀏覽器滾軸樣式 */
 .task-scroll {
     scrollbar-width: thin;
-    scrollbar-color: #3b475d #0d1218;
+    scrollbar-color: var(--border) var(--panel-2);
 }
 
-/* ========== Results ========== */
+/* =============== Results（比對結果） =============== */
+/* 結果網格佈局：響應式卡片排列 */
 .results-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 12px;
 }
 
+/* 單個結果項目樣式 */
 .result {
-    background: #0c1015;
+    background: var(--panel-2);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 10px;
+    border-radius: 10px;
+    padding: 12px;
+    transition: all 0.2s ease;
 }
 
+/* 結果項目懸停效果 */
+.result:hover {
+    border-color: var(--primary);
+    background: var(--panel);
+}
+
+/* 結果元資料區域：URL和分數 */
 .result .meta {
     display: flex;
     justify-content: center;
@@ -279,85 +441,185 @@ textarea {
     gap: 8px;
 }
 
+/* 結果URL連結樣式 */
 .result .url {
     max-width: 72%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: #9ecbff;
+    color: #ffffff;
     text-decoration: none;
+    transition: color 0.2s ease;
 }
 
+/* 結果URL懸停效果 */
+.result .url:hover {
+    color: var(--primary);
+}
+
+/* 相似度分數樣式 */
 .result .score {
     font-size: 28px;
     font-weight: 800;
-    color: #eaf2ff;
+    transition: color 0.2s ease;
 }
 
+/* 根據分數大小設定顏色：提供視覺化回饋 */
+.result .score[data-score] {
+    color: #94a3b8;
+    /* 預設淺灰色 */
+}
+
+.result .score[data-score="low"] {
+    color: #94a3b8;
+    /* 小於50% - 淺灰色 */
+}
+
+.result .score[data-score="medium"] {
+    color: var(--primary);
+    /* 50~70% - 藍色 */
+}
+
+.result .score[data-score="high"] {
+    color: #fbbf24;
+    /* 70~85% - 黃色 */
+}
+
+.result .score[data-score="very-high"] {
+    color: #ef4444;
+    /* 85%以上 - 紅色 */
+}
+
+/* 結果詳細資訊文字 */
 .result .tiny {
     text-align: center;
     margin-top: 4px;
-    color: #aaa;
+    color: #94a3b8;
 }
 
-
-/* ========== Divider ========== */
+/* =============== Divider（分隔線） =============== */
+/* 漸層分隔線：用於視覺分隔內容區域 */
 .divider {
     height: 1px;
-    background: linear-gradient(90deg, transparent, #30394a, transparent);
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
     margin: 8px 0;
 }
 
-/* ========== Progress Bar ========== */
+/* =============== Progress Bar（進度條） =============== */
+/* 進度條容器樣式 */
 .progress {
-    background: #0c0f14;
-    border: 1px solid #1c222c;
-    border-radius: 999px;
+    background: var(--progress-bg);
+    border: none;
+    border-radius: 8px;
     overflow: hidden;
+    position: relative;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+    /* 內陰影效果 */
 }
 
+/* 進度條填充部分 */
 .progress .bar {
     height: 100%;
-    background: linear-gradient(90deg, #3c83f6, #5aa4ff);
+    background: linear-gradient(90deg, var(--progress-fill), var(--progress-fill-light));
+    position: relative;
+    transition: width 0.3s ease;
 }
 
-/* ========== Log Viewer ========== */
+/* 進度條光澤效果：使用偽元素創建動畫光澤 */
+.progress .bar::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+    animation: shine 2s infinite;
+    /* 2秒循環的光澤動畫 */
+}
+
+/* 光澤動畫關鍵幀 */
+@keyframes shine {
+    0% {
+        transform: translateX(-100%);
+    }
+
+    100% {
+        transform: translateX(100%);
+    }
+}
+
+/* =============== Log Viewer（日誌查看器） =============== */
+/* 日誌顯示容器：使用等寬字體，支援滾動 */
 pre.log {
     max-height: 220px;
     overflow: auto;
-    background: #0a0e13;
+    background: var(--panel-2);
     border: 1px solid var(--border);
     padding: 10px;
-    border-radius: 10px;
+    border-radius: 8px;
     font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    color: #cfd7e6;
+    color: #cbd5e1;
     white-space: pre-wrap;
+    /* 保留換行和空格 */
     word-break: break-word;
+    /* 長單字自動換行 */
     text-align: left;
 }
 
+/* 日誌滾軸樣式：WebKit 瀏覽器 */
 pre.log::-webkit-scrollbar {
-    height: 8px;
-    width: 8px;
+    height: 6px;
+    width: 6px;
 }
 
 pre.log::-webkit-scrollbar-track {
-    background: #0d1218;
-    border-radius: 10px;
+    background: var(--panel-2);
+    border-radius: 8px;
 }
 
 pre.log::-webkit-scrollbar-thumb {
-    background: #2a3342;
-    border-radius: 10px;
+    background: var(--border);
+    border-radius: 8px;
 }
 
 pre.log::-webkit-scrollbar-thumb:hover {
-    background: #364154;
+    background: var(--primary);
 }
 
-/* ========== Responsive ========== */
+/* =============== Responsive（響應式設計） =============== */
+/* 平板裝置適配：768px 以下 */
+@media (max-width: 768px) {
+    .container {
+        margin: 20px auto;
+        padding: 0 16px;
+    }
+
+    .card {
+        padding: 16px;
+        border-radius: 10px;
+    }
+
+    /* 在小螢幕上改為單欄佈局 */
+    .grid-2 {
+        grid-template-columns: 1fr;
+    }
+
+    .btn {
+        padding: 8px 14px;
+    }
+}
+
+/* 手機裝置適配：480px 以下 */
 @media (max-width: 480px) {
+
+    /* 任務網格改為單欄排列 */
     .task-grid {
+        grid-template-columns: 1fr;
+    }
+
+    /* 結果網格改為單欄排列 */
+    .results-grid {
         grid-template-columns: 1fr;
     }
 }
