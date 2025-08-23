@@ -6,6 +6,7 @@ import yt_dlp
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from utils.logger import emit
 from utils.logger import logger
 from typing import Dict, Optional
 
@@ -319,7 +320,7 @@ def _handle_download_error(output_path: str, error: Exception) -> None:
         os.remove(output_path)
 
 
-def download_video(url: str, output_dir: str, resolution: str = "720p", max_retries: int = 3) -> str:
+def download_video(url: str, output_dir: str, resolution: str = "720p", max_retries: int = 3, task_id: str = None) -> str:
     """
     下載影片到指定目錄
 
@@ -328,6 +329,7 @@ def download_video(url: str, output_dir: str, resolution: str = "720p", max_retr
         output_dir: 輸出目錄
         resolution: 影片解析度 (預設: "720p")
         max_retries: 最大重試次數 (預設: 3)
+        task_id: 任務 ID，用於發送進度訊息
 
     Returns:
         str: 下載完成的檔案路徑
@@ -343,7 +345,14 @@ def download_video(url: str, output_dir: str, resolution: str = "720p", max_retr
     safe_filename, output_path = _setup_download_environment(url, output_dir)
 
     if _check_existing_file(output_path):
+        # 如果檔案已存在，發送相應的訊息
+        if task_id:
+            emit("progress", task_id=task_id, phase="download", percent=10, msg="影片已存在（本地檔案）")
         return output_path
+
+    # 如果檔案不存在，發送開始下載的訊息
+    if task_id:
+        emit("progress", task_id=task_id, phase="download", percent=0, msg="開始下載影片")
 
     try:
         _execute_download_process(url, output_path, resolution, max_retries)

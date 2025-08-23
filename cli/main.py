@@ -95,14 +95,19 @@ class VideoProcessor:
         Returns:
             dict: 處理結果
         """
+
+        # 開始準備影片
+        logger.info(f"開始準備影片: {link}")
+        emit("progress", task_id=task_id, phase="download", percent=0, msg="開始準備影片")
+
+        # 檢查是否已經處理過
         if link in self.processed:
             logger.info(f"使用緩存的處理結果: {link}")
             emit("progress", task_id=task_id, phase="download", percent=10, msg="影片已存在（快取）")
             return self.processed[link]
 
-        emit("progress", task_id=task_id, phase="download", percent=0, msg="開始下載/載入影片")
-        logger.info(f"下載與處理影片: {link}")
-        video_path = download_video(link, self.output_dir)
+        # 檢查是否存在本地檔案中，如果不存在就下載
+        video_path = download_video(link, self.output_dir, task_id=task_id)
         emit("progress", task_id=task_id, phase="download", percent=10, msg="影片就緒")
 
         data = self._process_video(video_path, link, task_id, preferred_lang)
