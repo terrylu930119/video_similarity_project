@@ -98,7 +98,7 @@ class VideoProcessor:
 
         # 開始準備影片
         logger.info(f"開始準備影片: {link}")
-        emit("progress", task_id=task_id, phase="download", percent=0, msg="開始準備影片")
+        emit("progress", task_id=task_id, phase="download", percent=1, msg="開始準備影片")
 
         # 檢查是否已經處理過
         if link in self.processed:

@@ -352,7 +352,7 @@ def download_video(url: str, output_dir: str, resolution: str = "720p", max_retr
 
     # 如果檔案不存在，發送開始下載的訊息
     if task_id:
-        emit("progress", task_id=task_id, phase="download", percent=0, msg="開始下載影片")
+        emit("progress", task_id=task_id, phase="download", percent=1, msg="開始下載影片")
 
     try:
         _execute_download_process(url, output_path, resolution, max_retries)
