@@ -637,8 +637,7 @@ class CompareService:
             "score": float(item.get("overall_similarity", 0.0)),
             "visual": float(item.get("image_similarity", 0.0)),
             "audio": float(item.get("audio_similarity", 0.0)),
-            "text": float(item.get("text_similarity", 0.0)),
-            "hot": item.get("hotspots") or []
+            "text": float(item.get("text_similarity", 0.0))
         }
 
         self._normalize_event_numbers(evt)

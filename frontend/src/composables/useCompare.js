@@ -350,8 +350,7 @@ export function useCompare() {
                         audio: Number(e.audio || 0).toFixed(2),
                         text: Number(e.text || 0).toFixed(2),
                         text_meaningful: (typeof e.text_meaningful === 'boolean' ? e.text_meaningful : true),
-                        text_status: (typeof e.text_status === 'string' ? e.text_status : ''),
-                        hot: Array.isArray(e.hot) ? e.hot.join('、') : ''
+                        text_status: (typeof e.text_status === 'string' ? e.text_status : '')
                     }
                     if (idx >= 0) results.splice(idx, 1, row)
                     else results.push(row)
