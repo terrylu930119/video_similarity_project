@@ -1,446 +1,169 @@
 # 🎬 影音比對系統 - 前端 API 整合指導
 
-## 📋 目錄
-- [API 概覽](#api-概覽)
-- [認證與 CORS](#認證與-cors)
-- [API 端點詳解](#api-端點詳解)
-- [Server-Sent Events](#server-sent-events)
-- [錯誤處理](#錯誤處理)
-- [前端整合範例](#前端整合範例)
-- [最佳實踐](#最佳實踐)
-
-## 🌐 API 概覽
-
-### **基礎資訊**
-- **Base URL**: `http://localhost:8000` (開發環境)
-- **API 版本**: `/api`
-- **通訊協定**: HTTP/HTTPS + Server-Sent Events
-- **資料格式**: JSON
-
-### **支援的影片平台**
-- ✅ YouTube (youtube.com, youtu.be)
-- ✅ Bilibili (bilibili.com, b23.tv)
-- ✅ 其他通用網站
-
-## 🔐 認證與 CORS
-
-### **CORS 設定**
-後端已啟用 CORS，支援跨域請求：
-```python
-# 後端設定
-allow_origins=["*"]
-allow_credentials=True
-allow_methods=["*"]
-allow_headers=["*"]
-```
-
-### **認證需求**
-目前 API 無需認證，但建議在生產環境中實作。
-
-## 📡 API 端點詳解
-
-### 1. **影片比對 API**
-
-#### **POST** `/api/compare`
-提交影片比對任務
-
-**請求格式：**
-```typescript
-interface CompareRequest {
-  ref: string;           // 參考影片 URL
-  comp: string[];        // 要比對的影片 URL 陣列
-  interval: string;      // 抽幀間隔 ("auto" | "0.5" | "1" | "2" | "5")
-  keep: boolean;         // 是否保留中間檔案
-  allow_self: boolean;   // 是否允許與自己比對
-}
-```
-
-**回應格式：**
-```typescript
-interface CompareResponse {
-  task_ids: Array<{
-    url: string;         // 影片 URL
-    task_id: string;     // 任務 ID
-    ref_url: string;     // 參考影片 URL
-  }>;
-}
-```
-
-**使用範例：**
+## 🚀 快速開始 
 ```javascript
-const response = await fetch('/api/compare', {
+// 提交比對任務
+const response = await fetch('http://localhost:8000/api/compare', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    ref: 'https://youtu.be/example1',
-    comp: ['https://youtu.be/example2', 'https://youtu.be/example3'],
-    interval: 'auto',
-    keep: false
+    ref: 'https://youtu.be/example1',        // 參考影片 URL
+    comp: ['https://youtu.be/example2'],     // 要比對的影片 URL 陣列
+    interval: 'auto'                         // 抽幀間隔，預設 "auto"
   })
 });
-
 const result = await response.json();
-console.log('任務ID:', result.task_ids);
+
+// 監聽 SSE
+const es = new EventSource('http://localhost:8000/api/events');
+es.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
 
-### 2. **狀態查詢 API**
+## 📑 API 一覽表
+| 路徑           | 方法  | 用途           |
+| -------------- | ---- | ------------ |
+| `/api/compare` | POST | 提交影片比對任務     |
+| `/api/status`  | POST | 查詢任務進度       |
+| `/api/cancel`  | POST | 取消比對任務       |
+| `/api/events`  | GET  | 接收實時事件 (SSE) |
 
-#### **POST** `/api/status`
-查詢任務執行狀態
 
-**請求格式：**
-```typescript
-interface StatusRequest {
-  ref: string;           // 參考影片 URL
-  comp: string[];        // 要比對的影片 URL 陣列
+## 📡 API 詳解
+
+### 1. POST `/api/compare`
+#### 請求 JSON
+```json
+{
+  "ref": "https://youtu.be/example1",        // 參考影片 URL (必填)
+  "comp": ["https://youtu.be/example2"],     // 要比對的影片 URL 陣列 (必填)
+  "interval": "auto",                        // 抽幀間隔："auto"|"0.5"|"1"|"2"|"5" (選填，預設"auto")
+  "keep": false,                             // 是否保留中間檔案 (選填，預設false)
+  "allow_self": false                        // 是否允許與自己比對 (選填，預設false)
 }
 ```
-
-**回應格式：**
-```typescript
-interface StatusItem {
-  url: string;           // 影片 URL
-  phase: string;         // 執行階段
-  percent: number;       // 進度百分比 (0-100)
-  cached_flags: {        // 快取標記
-    [key: string]: boolean;
-  };
+#### 回應 JSON
+```json
+{
+  "task_ids": [],                            // 任務ID陣列，初始為空，實際ID透過SSE hello事件提供
+  "cmd": ["python","-m","cli.main","--ref","https://youtu.be/example1","--comp","https://youtu.be/example2"]  // 除錯用命令列陣列
 }
 ```
+- task_ids 初始可能為空，實際 ID 會透過 SSE hello 事件提供。
+- **錯誤碼**  
+  - 409: 已有任務 → UI 提示「已有比對任務進行中」
+  - 422: 請求格式錯誤 → 提示使用者檢查參數
 
-**執行階段說明：**
-- `queued`: 佇列中
-- `download`: 下載中
-- `transcribe`: 轉錄中
-- `subtitle`: 字幕解析
-- `extract`: 抽幀中
-- `audio`: 音訊比對
-- `image`: 畫面比對
-- `text`: 文本比對
-- `compare`: 比對中
 
-### 3. **任務取消 API**
-
-#### **POST** `/api/cancel`
-取消正在執行的任務
-
-**請求格式：**
-```typescript
-interface CancelRequest {
-  task_ids: string[];    // 要取消的任務 ID 陣列
+### 2. POST `/api/status`
+#### 請求 JSON
+```json
+{
+  "ref": "https://youtu.be/example1",        // 參考影片 URL (必填)
+  "comp": ["https://youtu.be/example2"]      // 要比對的影片 URL 陣列 (必填)
 }
 ```
-
-**回應格式：**
-```typescript
-interface CancelResponse {
-  ok: boolean;           // 操作是否成功
-  killed: bool;          // 是否已終止任務
-}
-```
-
-## 🔄 Server-Sent Events
-
-### **事件端點**
-**GET** `/api/events`
-
-### **事件類型**
-
-#### 1. **進度更新事件**
-```typescript
-interface ProgressEvent {
-  type: 'progress';
-  task_id: string;
-  url: string;
-  phase: string;
-  percent: number;
-  phaseName?: string;    // 階段名稱（中文）
-  msg?: string;          // 日誌訊息
-  overallHint?: number;  // 整體進度提示
-  textSource?: 'subtitle' | 'asr';  // 文本來源
-  text_skipped?: boolean;           // 文本是否跳過
-  text_status?: string;             // 文本狀態
-}
-```
-
-#### 2. **日誌事件**
-```typescript
-interface LogEvent {
-  type: 'log';
-  task_id: string;
-  url: string;
-  msg: string;
-}
-```
-
-#### 3. **任務完成事件**
-```typescript
-interface DoneEvent {
-  type: 'done';
-  task_id: string;
-  url: string;
-  ref_url: string;
-  score: number;         // 相似度分數 (0-100)
-  visual: number;        // 畫面相似度
-  audio: number;         // 音訊相似度
-  text: number;          // 文本相似度
-  text_meaningful: boolean;  // 文本是否有效
-  text_status: string;       // 文本狀態
-  hot: string[];             // 熱門關鍵字
-}
-```
-
-#### 4. **任務取消事件**
-```typescript
-interface CanceledEvent {
-  type: 'canceled';
-  task_id: string;
-  url: string;
-}
-```
-
-### **前端整合範例**
-```javascript
-// 建立 SSE 連接
-const eventSource = new EventSource('/api/events');
-
-eventSource.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  
-  switch (data.type) {
-    case 'progress':
-      // 更新進度條
-      updateProgress(data.task_id, data.percent);
-      // 更新狀態
-      updateStatus(data.task_id, data.phase, data.phaseName);
-      // 添加日誌
-      if (data.msg) addLog(data.task_id, data.msg);
-      break;
-      
-    case 'done':
-      // 顯示結果
-      showResult(data);
-      break;
-      
-    case 'canceled':
-      // 處理取消
-      handleCancel(data.task_id);
-      break;
-  }
-};
-
-eventSource.onerror = (error) => {
-  console.error('SSE 連接錯誤:', error);
-  // 可以實作重連邏輯
-};
-```
-
-## ❌ 錯誤處理
-
-### **HTTP 狀態碼**
-- `200`: 成功
-- `409`: 衝突（例如：任務已存在）
-- `500`: 伺服器內部錯誤
-
-### **錯誤回應格式**
-```typescript
-interface ErrorResponse {
-  detail: string;        // 錯誤詳細訊息
-}
-```
-
-### **前端錯誤處理範例**
-```javascript
-try {
-  const response = await fetch('/api/compare', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestData)
-  });
-  
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || `HTTP ${response.status}`);
-  }
-  
-  const result = await response.json();
-  return result;
-  
-} catch (error) {
-  console.error('API 請求失敗:', error);
-  // 顯示錯誤訊息給用戶
-  showErrorMessage(error.message);
-}
-```
-
-## 🎯 前端整合範例
-
-### **完整的比對流程**
-```javascript
-class VideoCompareService {
-  constructor() {
-    this.eventSource = null;
-    this.tasks = new Map();
-  }
-  
-  // 開始比對
-  async startCompare(refUrl, compUrls, options = {}) {
-    try {
-      // 1. 提交比對任務
-      const response = await this.submitCompare(refUrl, compUrls, options);
-      
-      // 2. 建立 SSE 連接
-      this.connectEvents();
-      
-      // 3. 初始化任務狀態
-      response.task_ids.forEach(task => {
-        this.tasks.set(task.task_id, {
-          url: task.url,
-          status: 'queued',
-          progress: 0,
-          logs: []
-        });
-      });
-      
-      return response;
-      
-    } catch (error) {
-      console.error('開始比對失敗:', error);
-      throw error;
+#### 回應 JSON
+```json
+[
+  {
+    "url": "https://youtu.be/example1",      // 影片 URL
+    "phase": "download",                     // 處理階段：queued|download|transcribe|extract|compare
+    "percent": 30,                           // 進度百分比 (0-100)
+    "cached_flags": {                        // 快取檔案標記
+      "video": true,                         // 是否已下載影片檔
+      "transcript": false,                   // 是否已取得轉錄文本檔
+      "frames": false                        // 是否已抽取影格圖像
     }
   }
-  
-  // 提交比對請求
-  async submitCompare(refUrl, compUrls, options) {
-    const response = await fetch('/api/compare', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ref: refUrl,
-        comp: compUrls,
-        interval: options.interval || 'auto',
-        keep: options.keep || false
-      })
-    });
-    
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail);
-    }
-    
-    return await response.json();
-  }
-  
-  // 連接 SSE 事件
-  connectEvents() {
-    if (this.eventSource) {
-      this.eventSource.close();
-    }
-    
-    this.eventSource = new EventSource('/api/events');
-    
-    this.eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      this.handleEvent(data);
-    };
-    
-    this.eventSource.onerror = (error) => {
-      console.error('SSE 錯誤:', error);
-      // 實作重連邏輯
-      setTimeout(() => this.connectEvents(), 5000);
-    };
-  }
-  
-  // 處理事件
-  handleEvent(data) {
-    const task = this.tasks.get(data.task_id);
-    if (!task) return;
-    
-    switch (data.type) {
-      case 'progress':
-        task.status = data.phase;
-        task.progress = data.percent;
-        if (data.msg) task.logs.push(data.msg);
-        this.updateUI(task);
-        break;
-        
-      case 'done':
-        task.status = 'completed';
-        task.progress = 100;
-        task.result = data;
-        this.showResult(task);
-        break;
-    }
-  }
-  
-  // 取消任務
-  async cancelTask(taskId) {
-    try {
-      const response = await fetch('/api/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_ids: [taskId] })
-      });
-      
-      if (response.ok) {
-        const task = this.tasks.get(taskId);
-        if (task) {
-          task.status = 'canceled';
-          this.updateUI(task);
-        }
-      }
-    } catch (error) {
-      console.error('取消任務失敗:', error);
-    }
-  }
-  
-  // 清理資源
-  destroy() {
-    if (this.eventSource) {
-      this.eventSource.close();
-      this.eventSource = null;
-    }
-    this.tasks.clear();
-  }
+]
+```
+
+
+### 3. POST `/api/cancel`
+#### 請求 JSON
+```json
+{ 
+  "task_ids": ["abc123def4"]                 // 要取消的任務 ID 陣列 (必填)
+}
+```
+#### 回應 JSON
+```json
+{ 
+  "ok": true,                                // 操作是否成功
+  "killed": true                             // 是否已終止任務程序
 }
 ```
 
-## 🚀 最佳實踐
 
-### **1. 錯誤處理**
-- 實作完整的錯誤處理機制
-- 提供用戶友善的錯誤訊息
-- 實作重試機制
+## 🔄 SSE 事件 (`GET /api/events`)
+### hello
+```json
+{
+  "type": "hello",                           // 事件類型
+  "ref": {                                   // 參考影片資訊
+    "task_id": "ref-1",                      // 參考影片任務ID
+    "url": "https://youtu.be/example1"       // 參考影片URL
+  },
+  "targets": [{                              // 目標影片陣列
+    "task_id": "abc123def4",                 // 目標影片任務ID
+    "url": "https://youtu.be/example2"       // 目標影片URL
+  }]
+}
+```
+### progress
+```json
+{
+  "type": "progress",                        // 事件類型
+  "task_id": "abc123def4",                   // 任務ID
+  "url": "https://youtu.be/example2",        // 影片URL
+  "ref_url": "https://youtu.be/example1",    // 參考影片URL
+  "phase": "download",                       // 處理階段：queued|download|transcribe|extract|compare
+  "percent": 50,                             // 進度百分比 (0-100)
+  "msg": "下載中..."                         // 可選的狀態訊息
+}
+```
+### done
+```json
+{
+  "type": "done",                            // 事件類型
+  "task_id": "abc123def4",                   // 任務ID
+  "url": "https://youtu.be/example2",        // 影片URL
+  "ref_url": "https://youtu.be/example1",    // 參考影片URL
+  "score": 87.2,                             // 整體相似度分數 (0-100)
+  "visual": 80,                              // 畫面相似度分數 (0-100)
+  "audio": 92,                               // 音訊相似度分數 (0-100)
+  "text": 85,                                // 文本相似度分數 (0-100)
+  "text_meaningful": true,                   // 文本內容是否有效
+  "text_status": "ok"                        // 文本狀態描述
+}
+```
+### canceled
+```json
+{
+  "type": "canceled",                        // 事件類型
+  "task_id": "abc123def4",                   // 任務ID
+  "url": "https://youtu.be/example2",        // 影片URL
+  "ref_url": "https://youtu.be/example1"     // 參考影片URL
+}
+```
 
-### **2. 狀態管理**
-- 使用狀態管理工具（Vuex、Pinia 等）
-- 保持前端狀態與後端同步
-- 實作樂觀更新
+## 📊 任務生命週期
+```bash
+queued → download → transcribe/subtitle → extract → audio/image/text → compare → done
+                          ↓
+                       canceled
+```
 
-### **3. 用戶體驗**
-- 實作進度條和載入狀態
-- 提供實時進度更新
-- 支援任務取消和重試
+## ✅ 前置驗證規則
+- `comp` 陣列：1 ~ 10 筆
+- `interval`:`"auto" | "0.5" | "1" | "2" | "5"`
+- URL 必須為 YouTube / Bilibili / 支援網站
 
-### **4. 效能優化**
-- 實作請求去重
-- 使用防抖和節流
-- 實作資料快取
-
-### **5. 安全性**
-- 驗證輸入資料
-- 防止 XSS 攻擊
-- 實作適當的錯誤訊息過濾
-
-## 📚 參考資源
-
-- [FastAPI 官方文件](https://fastapi.tiangolo.com/)
-- [Server-Sent Events 規範](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
-- [Fetch API 文件](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API)
-
----
-
-**注意事項：**
-- 本文件基於後端 API 實作，如有變更請同步更新
-- 建議在開發過程中實作完整的錯誤處理和用戶回饋
-- 生產環境部署前請進行充分的測試 
+## 🛠️ 最佳實踐
+- SSE 去重：以 (`task_id, type, phase`) 當 key，避免重複渲染
+- 錯誤碼對應 UI：
+  - 409 → 提醒等待/取消舊任務
+  - 422 → 提示輸入有誤
+  - 500 → 提供「重試」按鈕
+- 斷線恢復：SSE 斷線後 → 先呼叫 `/api/status` → 再重連 SSE
+- 生產安全性：建議加上 API key / JWT 與限定 CORS
