@@ -284,7 +284,7 @@ def install_requirements(venv_python: Path) -> bool:
 # =============== 環境檢查 ===============
 
 
-def check_installed_packages() -> bool:
+def check_installed_packages(venv_python: Path) -> bool:
     """檢查已安裝的套件"""
     print_header("檢查已安裝套件")
 
@@ -299,9 +299,16 @@ def check_installed_packages() -> bool:
 
     for package in required_packages:
         try:
-            __import__(package.replace("-", "_"))
-            print_success(f"{package} ✓")
-        except ImportError:
+            result = subprocess.run([
+                str(venv_python), "-c", f"import {package.replace('-', '_')}"
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print_success(f"{package} ✓")
+            else:
+                print_error(f"{package} ✗")
+                missing_packages.append(package)
+        except Exception:
             print_error(f"{package} ✗")
             missing_packages.append(package)
 
@@ -313,44 +320,37 @@ def check_installed_packages() -> bool:
     return True
 
 
-def check_pytorch_cuda() -> bool:
+def check_pytorch_cuda(venv_python: Path) -> bool:
     """檢查 PyTorch CUDA 支援"""
     print_header("檢查 PyTorch CUDA 支援")
 
     try:
-        import torch
-        print_info(f"PyTorch 版本: {torch.__version__}")
-
-        if torch.cuda.is_available():
-            device_count = torch.cuda.device_count()
-            device_name = torch.cuda.get_device_name(0)
-            print_success(f"PyTorch CUDA 可用 ✓")
-            print_info(f"GPU 數量: {device_count}")
-            print_info(f"GPU 名稱: {device_name}")
-
-            # 測試 CUDA 功能
-            try:
-                test_tensor = torch.tensor([1.0]).cuda()
-                print_success("CUDA 測試成功 ✓")
-                return True
-            except Exception as e:
-                print_error(f"CUDA 測試失敗: {e}")
-                return False
+        result = subprocess.run([
+            str(venv_python), "-c", 
+            "import torch; "
+            "print(f'PyTorch 版本: {torch.__version__}'); "
+            "print(f'CUDA 版本: {torch.version.cuda}'); "
+            "print(f'CUDA 可用: {torch.cuda.is_available()}'); "
+            "print(f'GPU 數量: {torch.cuda.device_count() if torch.cuda.is_available() else 0}'); "
+            "print(f'GPU 名稱: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+        ], capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            print_success("PyTorch 檢查成功")
+            print(result.stdout)
+            return True
         else:
-            print_warning("PyTorch CUDA 不可用")
-            print_info("這可能是因為:")
-            print_info("1. 未安裝 CUDA 工具包")
-            print_info("2. PyTorch 版本與 CUDA 版本不匹配")
-            print_info("3. 未安裝 NVIDIA 驅動")
+            print_error(f"PyTorch 檢查失敗: {result.stderr}")
             return False
-    except ImportError:
-        print_error("PyTorch 未安裝")
+            
+    except Exception as e:
+        print_error(f"PyTorch 檢查失敗: {e}")
         return False
 
 
-def check_cuda_installation() -> bool:
-    """檢查 CUDA 安裝"""
-    print_header("檢查 CUDA 安裝")
+def check_nvidia_driver() -> bool:
+    """檢查 NVIDIA 驅動安裝"""
+    print_header("檢查 NVIDIA 驅動安裝")
 
     # 檢查 NVIDIA 驅動
     try:
@@ -363,25 +363,6 @@ def check_cuda_installation() -> bool:
             return False
     except FileNotFoundError:
         print_error("nvidia-smi 不可用，請安裝 NVIDIA 驅動")
-        return False
-
-    # 檢查 CUDA 工具包
-    try:
-        result = subprocess.run(["nvcc", "--version"], capture_output=True, text=True)
-        if result.returncode == 0:
-            print_success("CUDA 工具包已安裝")
-            # 提取 CUDA 版本
-            for line in result.stdout.split('\n'):
-                if 'release' in line.lower():
-                    print_info(f"CUDA 版本: {line.strip()}")
-                    break
-        else:
-            print_warning("CUDA 工具包未安裝")
-            print_info("下載地址: https://developer.nvidia.com/cuda-downloads")
-            return False
-    except FileNotFoundError:
-        print_warning("CUDA 工具包未安裝")
-        print_info("下載地址: https://developer.nvidia.com/cuda-downloads")
         return False
 
     return True
@@ -450,10 +431,10 @@ def main() -> None:
     install_node_dependencies()
 
     print_header("安裝結果檢查")
-    check_installed_packages()
+    check_installed_packages(venv_python)
     check_external_tools()
-    check_cuda_installation()
-    check_pytorch_cuda()
+    check_nvidia_driver()
+    check_pytorch_cuda(venv_python)
 
     print_header("安裝完成")
     print_success("依賴安裝完成！")

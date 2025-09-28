@@ -4,6 +4,7 @@ Pillow>=8.0.0
 psutil>=6.0.0
 filelock>=3.0.0
 tqdm>=4.64.0
+matplotlib>=3.5.0
 
 # 視頻處理相關依賴
 opencv-contrib-python>=4.5.0  # 包含 opencv-python 的所有功能
@@ -25,11 +26,11 @@ scipy>=1.7.0
 # 超參數優化（訓練用）
 optuna>=3.0.0 
 
-# PyTorch 相關依賴（使用 CUDA 12.1）
---find-links https://download.pytorch.org/whl/cu121
-torch==2.5.1+cu121
-torchvision==0.20.1+cu121
-torchaudio==2.5.1+cu121
+# PyTorch 相關依賴（使用 CUDA 12.1，相容 Python 3.10）
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.0.0,<2.5.0
+torchvision>=0.15.0,<0.20.0
+torchaudio>=2.0.0,<2.5.0
 torchlibrosa>=0.0.9
 
 # 自然語言處理與模型服務
