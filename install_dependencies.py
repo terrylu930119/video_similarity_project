@@ -438,9 +438,6 @@ def main() -> None:
 
     print_header("安裝完成")
     print_success("依賴安裝完成！")
-    print_info("您現在可以執行以下命令來測試安裝:")
-    print_info(f"{venv_python} main.py --help")
-    print_info("cd frontend && npm run dev")
 
 
 if __name__ == "__main__":
