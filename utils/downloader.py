@@ -1,4 +1,19 @@
 # utils/downloader.py
+"""
+檔案用途：影片下載與檔案管理工具
+
+此模組提供影片下載相關功能，包括：
+- 影片 URL 驗證與檔案命名
+- yt-dlp 下載配置與執行
+- 下載進度追蹤與錯誤處理
+- PANN 權重檔案管理
+
+主要功能：
+- download_video: 下載影片到指定目錄
+- ensure_pann_weights: 確保 PANN 權重檔案存在
+- 各種輔助工具函式
+"""
+
 import os
 import re
 import hashlib
@@ -321,15 +336,21 @@ def _handle_download_error(output_path: str, error: Exception) -> None:
 
 
 def download_video(url: str, output_dir: str, resolution: str = "720p", max_retries: int = 3, task_id: str = None) -> str:
-    """
-    下載影片到指定目錄
+    """下載影片到指定目錄，支援多種平台與格式。
+
+    功能：
+        - 驗證 URL 有效性
+        - 生成安全的檔案名稱
+        - 檢查現有檔案（避免重複下載）
+        - 使用 yt-dlp 下載影片
+        - 支援進度追蹤與錯誤處理
 
     Args:
-        url: 影片 URL
-        output_dir: 輸出目錄
-        resolution: 影片解析度 (預設: "720p")
-        max_retries: 最大重試次數 (預設: 3)
-        task_id: 任務 ID，用於發送進度訊息
+        url (str): 影片 URL
+        output_dir (str): 輸出目錄路徑
+        resolution (str, optional): 影片解析度。預設為 "720p"。
+        max_retries (int, optional): 最大重試次數。預設為 3。
+        task_id (str, optional): 任務 ID，用於發送進度訊息。
 
     Returns:
         str: 下載完成的檔案路徑
@@ -338,6 +359,11 @@ def download_video(url: str, output_dir: str, resolution: str = "720p", max_retr
         ValueError: URL 無效時拋出
         PermissionError: 沒有寫入權限時拋出
         Exception: 下載失敗時拋出
+
+    Note:
+        - 支援 YouTube、Bilibili 等多種平台
+        - 具有快取機制，避免重複下載
+        - 會發送進度訊息（如果提供 task_id）
     """
     if not is_valid_url(url):
         raise ValueError(f"無效的 URL: {url}")
@@ -364,14 +390,24 @@ def download_video(url: str, output_dir: str, resolution: str = "720p", max_retr
 
 # =============== PANN 權重管理 ===============
 def ensure_pann_weights(expected_size: int = 340_000_000) -> Path:
-    """
-    確保 PANN 權重檔案存在且完整，否則自動下載。
+    """確保 PANN 權重檔案存在且完整，否則自動下載。
+
+    功能：
+        - 檢查權重檔案是否存在於預設位置
+        - 驗證檔案大小是否完整
+        - 自動下載缺失或損壞的權重檔案
+        - 建立必要的目錄結構
 
     Args:
-        expected_size: 預期的檔案大小 (預設: 340MB)
+        expected_size (int, optional): 預期的檔案大小（位元組）。預設為 340MB。
 
     Returns:
         Path: 權重檔案的完整路徑
+
+    Note:
+        - 權重檔案預設位置：`~/panns_data/Cnn14_mAP=0.431.pth`
+        - 下載來源：Zenodo 官方儲存庫
+        - 具有全域快取機制，避免重複檢查
     """
     global _pann_weight_checked
 

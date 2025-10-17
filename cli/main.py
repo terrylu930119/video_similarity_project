@@ -21,9 +21,9 @@ import multiprocessing
 from pathlib import Path
 from utils.logger import logger, emit
 from utils.downloader import download_video
-from core.audio_processor import extract_audio
+from core.audio import extract_audio
 from typing import Union, Dict, List, Optional, Tuple
-from core.text_processor import transcribe_audio
+from core.text import transcribe_audio
 from concurrent.futures import ThreadPoolExecutor
 from utils.video_utils import extract_frames, get_video_info
 from core.similarity import calculate_overall_similarity, display_similarity_results
@@ -211,17 +211,17 @@ class VideoProcessor:
 
 
 # ======================== 檔案清理與信號處理 ========================
-def cleanup_files(path: str) -> None:
+def cleanup_files(path: Path) -> None:
     """
     清理指定路徑的檔案
 
     Args:
         path: 要清理的路徑
     """
-    if os.path.exists(path):
+    if path.exists():
         try:
             logger.info(f"清理: {path}")
-            shutil.rmtree(path)
+            shutil.rmtree(str(path))    # 將 Path 物件轉換為字串，因 shutil.rmtree 只接受字串
         except PermissionError as e:
             logger.warning(f"無法刪除部分檔案（可能正在使用中）: {e}")
         except Exception as e:
@@ -241,8 +241,8 @@ def signal_handler(signum: int, frame) -> None:
         return
     logger.info("接收到中斷，開始清理...")
     _cleanup_in_progress = True
-    cleanup_files("downloads")
-    cleanup_files("feature_cache")
+    cleanup_files(DOWNLOADS_DIR)
+    cleanup_files(CACHE_DIR)
     _cleanup_in_progress = False
     sys.exit(1)
 

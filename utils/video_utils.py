@@ -1,4 +1,21 @@
 # utils/video_utils.py
+"""
+檔案用途：影片處理與幀提取工具
+
+此模組提供影片處理相關功能，包括：
+- 影片檔案驗證與基本資訊擷取
+- 幀提取（支援 GPU 加速）
+- 關鍵幀擷取與分析
+- 幀預處理與尺寸調整
+
+主要功能：
+- check_video_file: 影片檔案有效性檢查
+- extract_frames: 從影片中提取幀（支援快取）
+- extract_keyframes: 關鍵幀擷取
+- get_video_info: 影片基本資訊擷取
+- 各種幀處理工具函式
+"""
+
 import os
 import cv2
 import torch
@@ -11,14 +28,22 @@ from typing import List, Tuple, Union
 
 
 def check_video_file(video_path: str) -> bool:
-    """
-    檢查影片檔案是否存在且可以打開
+    """檢查影片檔案是否存在且可以打開。
+
+    功能：
+        - 驗證檔案是否存在
+        - 嘗試使用 OpenCV 開啟影片檔案
+        - 檢查檔案是否可正常讀取
 
     Args:
-        video_path: 影片檔案路徑
+        video_path (str): 影片檔案路徑
 
     Returns:
-        bool: 影片檔案是否有效
+        bool: 影片檔案是否有效且可讀取
+
+    Note:
+        - 會記錄錯誤訊息到日誌
+        - 檢查完成後會釋放影片資源
     """
     if not os.path.exists(video_path):
         logger.error(f"影片檔案不存在: {video_path}")
@@ -190,16 +215,30 @@ def _collect_extracted_frames(frames_dir: str, video_id: str) -> List[str]:
 
 
 def extract_frames(video_path: str, output_dir: str, time_interval: float = 1.0) -> List[str]:
-    """
-    從影片中提取幀
+    """從影片中提取幀，支援快取與 GPU 加速。
+
+    功能：
+        - 檢查影片檔案有效性
+        - 檢查現有幀檔案（快取機制）
+        - 使用 FFmpeg 提取幀（支援 GPU 加速）
+        - 收集並回傳提取的幀檔案路徑
 
     Args:
-        video_path: 影片路徑
-        output_dir: 輸出目錄
-        time_interval: 幀提取時間間隔（秒）
+        video_path (str): 影片檔案路徑
+        output_dir (str): 輸出目錄路徑
+        time_interval (float, optional): 幀提取時間間隔（秒）。預設為 1.0。
 
     Returns:
         List[str]: 提取的幀檔案路徑列表
+
+    Raises:
+        subprocess.CalledProcessError: 當 FFmpeg 執行失敗時
+        Exception: 當其他處理錯誤發生時
+
+    Note:
+        - 支援 GPU 加速（如果可用）
+        - 具有快取機制，避免重複提取
+        - 會記錄處理過程到日誌
     """
     try:
         # 檢查影片檔案
@@ -334,16 +373,27 @@ def _save_keyframe(frame: np.ndarray, output_dir: str, frame_id: int) -> str:
 
 
 def extract_keyframes(video_path: str, output_dir: str, threshold: float = 30.0) -> List[str]:
-    """
-    從影片中提取關鍵幀
+    """從影片中提取關鍵幀，基於幀間差異分析。
+
+    功能：
+        - 逐幀讀取影片
+        - 對每幀進行預處理（灰階轉換、高斯模糊）
+        - 計算與前一幀的差異
+        - 根據閾值判斷是否為關鍵幀
+        - 保存關鍵幀到指定目錄
 
     Args:
-        video_path: 影片路徑
-        output_dir: 輸出目錄
-        threshold: 關鍵幀差異閾值
+        video_path (str): 影片檔案路徑
+        output_dir (str): 輸出目錄路徑
+        threshold (float, optional): 關鍵幀差異閾值。預設為 30.0。
 
     Returns:
         List[str]: 關鍵幀檔案路徑列表
+
+    Note:
+        - 使用灰階轉換與高斯模糊進行預處理
+        - 基於幀間平均差異判斷關鍵幀
+        - 會記錄提取的關鍵幀數量
     """
     if not check_video_file(video_path):
         return []
