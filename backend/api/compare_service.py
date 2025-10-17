@@ -1,15 +1,25 @@
-"""compare_service：比對流程的服務層，包裝 CLI 與事件流。
-
-檔案用途：
-- 啟動與管理影片相似度比對的子程序（透過 `cli.main`）。
-- 解析 CLI 的標準輸出，轉換為結構化事件（SSE）與最終結果。
-- 提供查詢狀態、取消任務等 API 供上層呼叫。
-
-設計原則：
-- 控制層薄化：`compare_api` 僅負責 HTTP 轉譯，商業邏輯集中於本服務。
-- 對 CLI 的輸出解析採取「容錯優先」策略，避免因單一列錯誤導致整體中斷。
+# 檔案用途：影片相似度比對服務核心模組（子程序管理、事件處理、狀態追蹤）
 """
-# backend/api/compare_service.py
+影片相似度比對服務核心模組
+
+此模組負責影片比對任務的核心業務邏輯，包括：
+- 子程序啟動與管理（CLI 模組調用）
+- 即時事件處理與 SSE 推送
+- 任務狀態追蹤與進度監控
+- 多執行緒日誌解析與事件分發
+
+主要類別：
+- CompareService: 主要服務類別，管理整個比對流程
+- ProgressEventData: 進度事件資料結構
+- TaskEntryData: 任務條目資料結構
+
+設計特點：
+- 非同步事件驅動架構
+- 多執行緒日誌解析
+- 程序生命週期管理
+- 錯誤處理與資源清理
+"""
+
 import os
 import sys
 import time
@@ -58,17 +68,47 @@ class TaskEntryData(NamedTuple):
 
 # =============== 工具函式 ===============
 def _ts() -> int:
-    """取得當前時間戳記（毫秒）"""
+    """
+    取得當前時間戳記（毫秒）
+    
+    返回當前時間的毫秒級時間戳記，用於事件時間標記。
+    
+    Returns:
+        int: 當前時間戳記（毫秒）
+    """
     return int(time.time() * 1000)
 
 
 def make_task_id(url: str) -> str:
-    """根據 URL 產生任務 ID"""
+    """
+    根據 URL 產生任務 ID
+    
+    使用 SHA1 雜湊演算法為 URL 產生唯一的任務 ID，取前 10 個字元。
+    
+    Args:
+        url: 影片 URL
+        
+    Returns:
+        str: 10 位元的任務 ID
+    """
     return hashlib.sha1(url.encode("utf-8")).hexdigest()[:10]
 
 
 def _extract_youtube_id(url: str, host: str, path: str, query: dict) -> Optional[str]:
-    """提取 YouTube 影片 ID"""
+    """
+    提取 YouTube 影片 ID
+    
+    從 YouTube URL 中提取影片 ID，支援 youtu.be 和 youtube.com 格式。
+    
+    Args:
+        url: 完整的 YouTube URL
+        host: URL 的主機名稱
+        path: URL 的路徑部分
+        query: URL 的查詢參數字典
+        
+    Returns:
+        Optional[str]: YouTube 影片 ID，如果無法提取則返回 None
+    """
     if "youtu.be" in host:
         return path.strip("/").split("/")[-1]
     if "youtube.com" in host:
@@ -80,7 +120,17 @@ def _extract_youtube_id(url: str, host: str, path: str, query: dict) -> Optional
 
 
 def _extract_bilibili_id(url: str) -> Optional[str]:
-    """提取 Bilibili 影片 ID"""
+    """
+    提取 Bilibili 影片 ID
+    
+    使用正則表達式從 Bilibili URL 中提取 BV 開頭的影片 ID。
+    
+    Args:
+        url: Bilibili 影片 URL
+        
+    Returns:
+        Optional[str]: Bilibili 影片 ID（BV 開頭），如果無法提取則返回 None
+    """
     import re
     match = re.search(r"(BV[a-zA-Z0-9]+)", url)
     return match.group(1) if match else None
@@ -89,7 +139,15 @@ def _extract_bilibili_id(url: str) -> Optional[str]:
 def video_id(u: str) -> str:
     """
     從 URL 中提取影片 ID
+    
+    從各種影片網站的 URL 中提取唯一的影片識別碼，支援多個主流平台。
 
+    Args:
+        u: 影片 URL
+        
+    Returns:
+        str: 提取的影片 ID，最多 64 個字元
+        
     支援的網站：
     - YouTube (youtube.com, youtu.be)
     - Bilibili (bilibili.com, b23.tv)
@@ -121,7 +179,14 @@ def video_id(u: str) -> str:
 
 
 def kill_tree(p: subprocess.Popen) -> None:
-    """強制終止程序及其子程序"""
+    """
+    強制終止程序及其子程序
+    
+    跨平台地終止程序及其所有子程序，Windows 使用 taskkill，Unix 使用信號。
+    
+    Args:
+        p: 要終止的子程序物件
+    """
     try:
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], check=False)
@@ -133,31 +198,39 @@ def kill_tree(p: subprocess.Popen) -> None:
 
 # =============== 程序上下文類別 ===============
 class _ProcContext:
-    """程序執行上下文，封裝一次比對流程的關聯資訊。
-
-    屬性：
-        ref_url (str): 參考影片 URL。
-        ref_task_id (str): 參考影片對應的任務 ID。
-        active_target_id (Optional[str]): 目前正在處理的目標任務 ID（若可判定）。
+    """
+    程序執行上下文類別
+    
+    儲存子程序執行期間的參考影片相關資訊，用於多執行緒環境下的
+    狀態共享和事件處理。
+    
+    Attributes:
+        ref_url: 參考影片 URL
+        ref_task_id: 參考影片的任務 ID
     """
 
     def __init__(self, ref_url: str, ref_task_id: str):
+        """
+        初始化程序上下文
+        
+        Args:
+            ref_url: 參考影片 URL
+            ref_task_id: 參考影片的任務 ID
+        """
         self.ref_url = ref_url
         self.ref_task_id = ref_task_id
 
 
 # =============== 主要服務類別 ===============
 class CompareService:
-    """影片相似度比對服務主類別。
-
-    責任範圍：
-        - 管理比對程序的啟動、關閉與輸出解析
-        - 維護任務與 URL 的映射，並發送 SSE 事件
-        - 提供啟動、狀態查詢、取消等 API
-    """
+    """影片相似度比對服務主類別"""
 
     def __init__(self) -> None:
-        """初始化比對服務"""
+        """
+        初始化比對服務
+        
+        設定事件佇列、程序管理、目錄路徑和任務狀態等核心組件。
+        """
         # 事件佇列和程序管理
         self.EVENT_QUEUE: asyncio.Queue[dict] = asyncio.Queue()
         self.RUNNING_PROC: Optional[subprocess.Popen] = None
@@ -181,9 +254,17 @@ class CompareService:
 
     @asynccontextmanager
     async def lifespan(self, app):
-        """應用程式生命週期管理。
-
-        在應用結束時確保子程序被正確終止，避免殭屍程序。
+        """
+        應用程式生命週期管理器
+        
+        管理 FastAPI 應用程式的啟動和關閉生命週期，確保在應用程式
+        關閉時正確清理執行中的子程序。
+        
+        Args:
+            app: FastAPI 應用程式實例
+            
+        Yields:
+            None: 在生命週期期間保持運行
         """
         try:
             yield
@@ -197,11 +278,22 @@ class CompareService:
                 pass
 
     async def sse_events(self):
-        """SSE 事件串流。
-
-        回傳 Starlette 的 `EventSourceResponse`，持續輸出以 NDJSON 形式封裝的事件。
+        """
+        提供 Server-Sent Events 事件串流
+        
+        建立非同步生成器，持續從事件佇列中取得事件並推送給客戶端。
+        事件包括任務進度、狀態變化、錯誤訊息和完成結果。
+        
+        Returns:
+            EventSourceResponse: SSE 事件串流回應物件
         """
         async def gen():
+            """
+            SSE 事件生成器
+            
+            持續從事件佇列中取得事件並格式化為 SSE 格式。
+            不再回放 queued 事件，避免重複；完全交給 hello 建立。
+            """
             # 不再回放 queued，避免重複；完全交給 hello 建立
             while True:
                 e = await self.EVENT_QUEUE.get()
@@ -210,13 +302,23 @@ class CompareService:
 
     # =============== 主要業務邏輯 ===============
     def start_compare(self, *, ref: str, comp: List[str], interval: str = "auto", keep: bool = False):
-        """啟動影片比對任務。
+        """
+        啟動影片比對任務
+        
+        根據提供的參考影片和比對影片列表，啟動非同步比對任務。
+        任務將在背景執行，進度可透過 SSE 事件監聽。
 
         Args:
-            ref (str): 參考影片 URL。
-            comp (List[str]): 要比對的影片 URL 列表。
-            interval (str): 幀提取間隔策略（預設 "auto"）。
-            keep (bool): 是否保留中間檔案。
+            ref: 參考影片 URL
+            comp: 要比對的影片 URL 列表
+            interval: 幀提取間隔（auto 或數字）
+            keep: 是否保留中間檔案
+            
+        Returns:
+            dict: 包含任務 ID 列表和命令列參數的字典
+            
+        Raises:
+            RuntimeError: 當已有任務在執行時
         """
         with self._lock:
             if self.RUNNING_PROC and self.RUNNING_PROC.poll() is None:
@@ -228,39 +330,43 @@ class CompareService:
             # 建立命令列
             cmd = self._build_command(ref, comp, interval, keep)
 
-            # 產生參考影片任務 ID
-            ref_task_id = f"ref-{make_task_id(ref)}"
-
             # 啟動子程序
             self._start_subprocess(cmd)
 
             # 啟動讀取器執行緒
             self._start_reader_threads(ref)
 
-            # 回傳任務 ID（至少有參考影片的任務 ID）
-            return {"task_ids": [ref_task_id], "cmd": cmd}
+            # 回傳目前尚無 task_ids（等 hello 後前端自會收到）
+            return {"task_ids": [], "cmd": cmd}
 
     def status(self, *, ref: str, comp: List[str]) -> List[dict]:
-        """查詢任務狀態。
+        """
+        查詢任務狀態
+        
+        檢查指定影片的處理進度，包括下載、轉錄、特徵提取等階段。
+        透過檢查相關檔案的存在狀態來判斷當前處理階段。
 
         Args:
-            ref (str): 參考影片 URL。
-            comp (List[str]): 要比對的影片 URL 列表。
+            ref: 參考影片 URL
+            comp: 要比對的影片 URL 列表
 
         Returns:
-            List[dict]: 各影片的處理狀態列表。
+            List[dict]: 各影片的處理狀態列表，包含階段、進度百分比和快取標記
         """
         urls = [ref] + list(comp or [])
         return [self._probe_video_status(u) for u in urls]
 
     def cancel(self, *, task_ids: List[str]) -> dict:
-        """取消指定任務。
+        """
+        取消指定任務
+        
+        終止指定的比對任務，發送取消事件並清理相關資源。
 
         Args:
-            task_ids (List[str]): 要取消的任務 ID 列表。
+            task_ids: 要取消的任務 ID 列表
 
         Returns:
-            dict: 取消結果。
+            dict: 取消操作結果，包含成功狀態和是否成功終止程序
         """
         # 發送取消事件
         self._send_cancel_events(task_ids)
@@ -272,14 +378,34 @@ class CompareService:
 
     # =============== 私有方法 ===============
     def _init_task_state(self, ref: str) -> None:
-        """初始化任務狀態。"""
+        """
+        初始化任務狀態
+        
+        重置任務相關的狀態變數，為新的比對任務做準備。
+        
+        Args:
+            ref: 參考影片 URL
+        """
         self.CURRENT_TASK_IDS = []
         self._ref_task_id = f"ref-{make_task_id(ref)}"
         self._ref_url = ref
         self._id_to_url.clear()
 
     def _build_command(self, ref: str, comp: List[str], interval: str, keep: bool) -> List[str]:
-        """建立命令列參數。"""
+        """
+        建立 CLI 命令列參數
+        
+        根據輸入參數構建用於啟動子程序的命令列參數列表。
+        
+        Args:
+            ref: 參考影片 URL
+            comp: 比對影片 URL 列表
+            interval: 幀提取間隔
+            keep: 是否保留中間檔案
+            
+        Returns:
+            List[str]: 命令列參數列表
+        """
         cmd = [
             sys.executable, "-m", "cli.main",
             "--ref", ref,
@@ -293,7 +419,15 @@ class CompareService:
         return cmd
 
     def _start_subprocess(self, cmd: List[str]) -> None:
-        """啟動子程序。"""
+        """
+        啟動子程序
+        
+        使用指定的命令列參數啟動 CLI 模組子程序，並設定適當的環境變數。
+        支援 Windows 和 Unix 系統的程序群組管理。
+        
+        Args:
+            cmd: 要執行的命令列參數列表
+        """
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUNBUFFERED"] = "1"
@@ -311,7 +445,15 @@ class CompareService:
             )
 
     def _start_reader_threads(self, ref: str) -> None:
-        """啟動讀取器執行緒。"""
+        """
+        啟動讀取器執行緒
+        
+        啟動標準輸出和標準錯誤的讀取器執行緒，以及程序完成監控執行緒。
+        這些執行緒負責解析子程序輸出並產生相應的事件。
+        
+        Args:
+            ref: 參考影片 URL
+        """
         buf: List[str] = []
         ctx = _ProcContext(ref_url=ref, ref_task_id=self._ref_task_id)
 
@@ -325,7 +467,17 @@ class CompareService:
         ).start()
 
     def _probe_video_status(self, url: str) -> dict:
-        """探測單一影片的處理狀態。"""
+        """
+        探測單一影片的處理狀態
+        
+        檢查指定影片的處理進度，透過檢查相關檔案的存在狀態來判斷當前階段。
+        
+        Args:
+            url: 影片 URL
+            
+        Returns:
+            dict: 包含影片狀態的字典，包括階段、進度百分比和快取標記
+        """
         vid = video_id(url)
         mp4 = self.DOWNLOADS_DIR / f"{vid}.mp4"
         transcript_txt = self.DOWNLOADS_DIR / f"{vid}_transcript.txt"
@@ -358,7 +510,15 @@ class CompareService:
         }
 
     def _send_cancel_events(self, task_ids: List[str]) -> None:
-        """發送取消事件。"""
+        """
+        發送取消事件
+        
+        為指定的任務 ID 發送取消事件到事件佇列。
+        如果 task_ids 為空，則取消所有任務。
+        
+        Args:
+            task_ids: 要取消的任務 ID 列表
+        """
         want = set(task_ids or [])
         for item in self.CURRENT_TASK_IDS:
             if (not want) or (item["task_id"] in want):
@@ -370,7 +530,14 @@ class CompareService:
                 })
 
     def _terminate_process(self) -> bool:
-        """終止執行中的程序。"""
+        """
+        終止執行中的程序
+        
+        安全地終止當前執行的子程序及其所有子程序。
+        
+        Returns:
+            bool: 是否成功終止程序
+        """
         killed = False
         with self._lock:
             if self.RUNNING_PROC and self.RUNNING_PROC.poll() is None:
@@ -379,7 +546,15 @@ class CompareService:
         return killed
 
     def _enqueue(self, e: dict) -> None:
-        """將事件加入佇列。"""
+        """
+        將事件加入佇列
+        
+        將事件字典加入非同步事件佇列，自動添加時間戳記。
+        如果佇列已滿則靜默忽略。
+        
+        Args:
+            e: 要加入的事件字典
+        """
         if "ts" not in e:
             e["ts"] = _ts()
         try:
@@ -388,7 +563,17 @@ class CompareService:
             pass
 
     def _decode_line(self, b: bytes) -> str:
-        """解碼位元組為字串，嘗試多種編碼。"""
+        """
+        解碼位元組為字串，嘗試多種編碼
+        
+        嘗試多種編碼格式解碼位元組資料，以處理不同系統的編碼差異。
+        
+        Args:
+            b: 要解碼的位元組資料
+            
+        Returns:
+            str: 解碼後的字串
+        """
         if not b:
             return ""
         for enc in ("utf-8", "utf-8-sig", "cp950", "big5", "latin1"):
@@ -399,7 +584,15 @@ class CompareService:
         return b.decode("utf-8", errors="replace")
 
     def _normalize_event_numbers(self, obj: dict) -> None:
-        """正規化事件中的數值。"""
+        """
+        正規化事件中的數值
+        
+        確保事件中的數值在合理範圍內，並統一數值格式。
+        進度百分比限制在 0-100 之間，相似度分數統一為百分比格式。
+        
+        Args:
+            obj: 要正規化的事件字典
+        """
         if obj.get("type") == "progress":
             pct = obj.get("percent")
             if isinstance(pct, (int, float)):
@@ -416,7 +609,16 @@ class CompareService:
                     obj[k] = round(x, 2)
 
     def _handle_json_event(self, obj: dict, ctx: "_ProcContext") -> None:
-        """處理 JSON 格式的事件。"""
+        """
+        處理 JSON 格式的事件
+        
+        解析從子程序輸出的 JSON 格式事件，進行必要的欄位補充和
+        數值正規化，然後加入事件佇列。
+        
+        Args:
+            obj: JSON 事件字典
+            ctx: 程序執行上下文
+        """
         etype = obj.get("type")
 
         if etype == "hello":
@@ -433,7 +635,19 @@ class CompareService:
         self._enqueue(obj)
 
     def _create_task_entry(self, task_id: str, url: str, ref_url: str) -> dict:
-        """建立任務條目。"""
+        """
+        建立任務條目
+        
+        建立標準化的任務條目字典，用於任務追蹤和管理。
+        
+        Args:
+            task_id: 任務 ID
+            url: 影片 URL
+            ref_url: 參考影片 URL
+            
+        Returns:
+            dict: 任務條目字典
+        """
         return {
             "task_id": task_id,
             "url": url,
@@ -441,7 +655,17 @@ class CompareService:
         }
 
     def _create_progress_event(self, data: ProgressEventData) -> dict:
-        """建立進度事件。"""
+        """
+        建立進度事件
+        
+        將進度事件資料轉換為標準化的事件字典格式。
+        
+        Args:
+            data: 進度事件資料結構
+            
+        Returns:
+            dict: 進度事件字典
+        """
         return {
             "type": "progress",
             "task_id": data.task_id,
@@ -453,7 +677,15 @@ class CompareService:
         }
 
     def _process_reference_video(self, ref_data: dict, ctx: "_ProcContext") -> None:
-        """處理參考影片。"""
+        """
+        處理參考影片
+        
+        從 hello 事件中提取參考影片資訊，建立任務條目並發送初始進度事件。
+        
+        Args:
+            ref_data: 參考影片資料字典
+            ctx: 程序執行上下文
+        """
         if not ref_data:
             return
 
@@ -477,7 +709,14 @@ class CompareService:
             self._enqueue(self._create_progress_event(progress_data))
 
     def _process_target_videos(self, targets: List[dict]) -> None:
-        """處理目標影片列表。"""
+        """
+        處理目標影片列表
+        
+        從 hello 事件中提取目標影片資訊，為每個影片建立任務條目並發送初始進度事件。
+        
+        Args:
+            targets: 目標影片資料列表
+        """
         for target in targets:
             task_id = target.get("task_id") or make_task_id(target.get("url", ""))
             url = target.get("url")
@@ -499,7 +738,16 @@ class CompareService:
                 self._enqueue(self._create_progress_event(progress_data))
 
     def _handle_hello_event(self, obj: dict, ctx: "_ProcContext") -> None:
-        """處理 hello 事件，建立所有任務。"""
+        """
+        處理 hello 事件，建立所有任務
+        
+        從 CLI 模組的 hello 事件中提取所有任務資訊，包括參考影片和目標影片，
+        並建立對應的任務條目和進度事件。
+        
+        Args:
+            obj: hello 事件字典
+            ctx: 程序執行上下文
+        """
         ref_data = obj.get("ref") or {}
         targets = obj.get("targets") or []
         self.CURRENT_TASK_IDS = []
@@ -511,7 +759,14 @@ class CompareService:
         self._process_target_videos(targets)
 
     def _fill_missing_fields(self, obj: dict) -> None:
-        """補充事件中缺失的欄位。"""
+        """
+        補充事件中缺失的欄位
+        
+        為事件字典補充缺失的 URL 和參考 URL 欄位，確保事件完整性。
+        
+        Args:
+            obj: 要補充欄位的事件字典
+        """
         tid = obj.get("task_id")
         if tid and "url" not in obj:
             u = self._id_to_url.get(tid)
@@ -522,9 +777,25 @@ class CompareService:
             obj["ref_url"] = self._ref_url
 
     def _start_reader_thread(self, stream, buf: List[str], ctx: "_ProcContext"):
-        """啟動讀取器執行緒。"""
+        """
+        啟動讀取器執行緒
+        
+        建立並啟動一個執行緒來讀取子程序的輸出流，解析 JSON 事件和日誌訊息。
+        
+        Args:
+            stream: 要讀取的輸出流（stdout 或 stderr）
+            buf: 用於儲存原始輸出的緩衝區
+            ctx: 程序執行上下文
+            
+        Returns:
+            threading.Thread: 啟動的執行緒物件
+        """
         def run():
-            """執行緒主要邏輯"""
+            """
+            執行緒主要邏輯
+            
+            持續讀取子程序輸出，解析 JSON 事件和日誌訊息。
+            """
             while True:
                 if self._should_stop_reading(stream):
                     break
@@ -561,13 +832,34 @@ class CompareService:
         return t
 
     def _should_stop_reading(self, stream) -> bool:
-        """檢查是否應該停止讀取。"""
+        """
+        檢查是否應該停止讀取
+        
+        判斷讀取器執行緒是否應該停止，基於程序狀態和流狀態。
+        
+        Args:
+            stream: 要檢查的輸出流
+            
+        Returns:
+            bool: 是否應該停止讀取
+        """
         return (self.RUNNING_PROC and
                 self.RUNNING_PROC.poll() is not None and
                 stream.closed)
 
     def _try_parse_json(self, decoded: str, ctx: "_ProcContext") -> bool:
-        """嘗試解析 JSON 事件。"""
+        """
+        嘗試解析 JSON 事件
+        
+        嘗試將解碼後的字串解析為 JSON 事件，如果成功則處理該事件。
+        
+        Args:
+            decoded: 解碼後的字串
+            ctx: 程序執行上下文
+            
+        Returns:
+            bool: 是否成功解析並處理 JSON 事件
+        """
         try:
             obj = json.loads(decoded)
             if isinstance(obj, dict) and obj.get("type"):
@@ -578,7 +870,15 @@ class CompareService:
         return False
 
     def _handle_non_json_log(self, decoded: str, ctx: "_ProcContext") -> None:
-        """處理非 JSON 格式的日誌。"""
+        """
+        處理非 JSON 格式的日誌
+        
+        處理無法解析為 JSON 的日誌訊息，根據環境變數設定決定是否轉發。
+        
+        Args:
+            decoded: 解碼後的日誌字串
+            ctx: 程序執行上下文
+        """
         # 用「目前是否有作用中的 target」來判斷這行屬於誰
         is_target = bool(getattr(ctx, "active_target_id", None))
 
@@ -599,7 +899,16 @@ class CompareService:
             })
 
     def _wait_and_emit_done(self, ref: str, buf: List[str], threads: Tuple[threading.Thread, ...]):
-        """等待程序完成並發送完成事件。"""
+        """
+        等待程序完成並發送完成事件
+        
+        等待子程序結束，處理輸出結果，並發送相應的完成事件。
+        
+        Args:
+            ref: 參考影片 URL
+            buf: 原始輸出緩衝區
+            threads: 讀取器執行緒列表
+        """
         with self._lock:
             proc = self.RUNNING_PROC
         if not proc:
@@ -631,7 +940,14 @@ class CompareService:
             })
 
     def _join_reader_threads(self, threads: Tuple[threading.Thread, ...]) -> None:
-        """等待讀取器執行緒結束。"""
+        """
+        等待讀取器執行緒結束
+        
+        等待所有讀取器執行緒正常結束，設定超時避免無限等待。
+        
+        Args:
+            threads: 要等待的執行緒列表
+        """
         for t in threads:
             try:
                 t.join(timeout=0.5)
@@ -639,7 +955,15 @@ class CompareService:
                 pass
 
     def _process_cli_results(self, ref: str, buf: List[str]) -> None:
-        """處理 CLI 輸出的結果。"""
+        """
+        處理 CLI 輸出的結果
+        
+        從 CLI 模組的輸出中提取比對結果，並發送相應的事件。
+        
+        Args:
+            ref: 參考影片 URL
+            buf: 原始輸出緩衝區
+        """
         try:
             joined = "\n".join(buf)
             results = self._extract_results_from_stdout(joined)
@@ -650,7 +974,15 @@ class CompareService:
             pass
 
     def _emit_result_event(self, item: dict, ref: str) -> None:
-        """發送結果事件。"""
+        """
+        發送結果事件
+        
+        將比對結果轉換為事件格式並發送到事件佇列。
+        
+        Args:
+            item: 比對結果項目字典
+            ref: 參考影片 URL
+        """
         link = item.get("link")
         tid = self._get_task_id_for_url(link)
 
@@ -666,9 +998,7 @@ class CompareService:
             "score": float(item.get("overall_similarity", 0.0)),
             "visual": float(item.get("image_similarity", 0.0)),
             "audio": float(item.get("audio_similarity", 0.0)),
-            "text": float(item.get("text_similarity", 0.0)),
-            "text_meaningful": item.get("text_meaningful", True),
-            "text_status": item.get("text_status", "ok")
+            "text": float(item.get("text_similarity", 0.0))
         }
 
         self._normalize_event_numbers(evt)
@@ -686,7 +1016,17 @@ class CompareService:
         })
 
     def _get_task_id_for_url(self, url: str) -> Optional[str]:
-        """根據 URL 取得任務 ID。"""
+        """
+        根據 URL 取得任務 ID
+        
+        從 URL 到任務 ID 的映射中查找對應的任務 ID。
+        
+        Args:
+            url: 影片 URL
+            
+        Returns:
+            Optional[str]: 對應的任務 ID，如果找不到則返回 None
+        """
         for k, v in self._id_to_url.items():
             if v == url:
                 return k
@@ -694,7 +1034,17 @@ class CompareService:
 
     @staticmethod
     def _extract_results_from_stdout(text: str):
-        """從標準輸出中提取結果 JSON。"""
+        """
+        從標準輸出中提取結果 JSON
+        
+        使用正則表達式從 CLI 輸出中提取 JSON 格式的比對結果。
+        
+        Args:
+            text: CLI 的標準輸出文字
+            
+        Returns:
+            Optional[List[dict]]: 提取的結果列表，如果找不到則返回 None
+        """
         import re
         candidates = re.findall(r"(\[\s*\{.*?\}\s*\])", text, flags=re.S)
         for s in reversed(candidates):
