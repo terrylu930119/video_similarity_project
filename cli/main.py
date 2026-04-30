@@ -211,17 +211,20 @@ class VideoProcessor:
 
 
 # ======================== 檔案清理與信號處理 ========================
-def cleanup_files(path: Path) -> None:
+def cleanup_files(path: Union[str, Path]) -> None:
     """
     清理指定路徑的檔案
 
     Args:
-        path: 要清理的路徑
+        path: 要清理的路徑（可以是字串或 Path 物件）
     """
-    if path.exists():
+    # 統一轉換為 Path 物件
+    path_obj = Path(path) if isinstance(path, str) else path
+    
+    if path_obj.exists():
         try:
-            logger.info(f"清理: {path}")
-            shutil.rmtree(str(path))    # 將 Path 物件轉換為字串，因 shutil.rmtree 只接受字串
+            logger.info(f"清理: {path_obj}")
+            shutil.rmtree(str(path_obj))    # 將 Path 物件轉換為字串，因 shutil.rmtree 只接受字串
         except PermissionError as e:
             logger.warning(f"無法刪除部分檔案（可能正在使用中）: {e}")
         except Exception as e:

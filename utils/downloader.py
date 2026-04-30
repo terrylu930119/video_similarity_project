@@ -137,8 +137,12 @@ def _create_format_string(resolution: str) -> str:
     Returns:
         str: 格式選擇字串
     """
-    height_limit = resolution[:-1]  # 移除 'p' 後綴
-    return f'bestvideo[height<={height_limit}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={height_limit}]+bestaudio/best[height<={height_limit}]/best'
+    height_limit = resolution[:-1]
+    return (
+    f'bestvideo[height<={height_limit}]+bestaudio/'
+    f'best[height<={height_limit}]/'
+    f'best'
+)
 
 
 def _create_basic_options(output_path: str, max_retries: int) -> Dict[str, object]:
@@ -216,12 +220,6 @@ def _create_advanced_options() -> Dict[str, object]:
         'geo_bypass_country': 'US',
         'extractor_retries': 5,
         'format_sort': ['res', 'ext:mp4:m4a', 'size', 'br', 'asr'],
-        # 添加 PO Token 支援以解決字幕下載問題
-        'extractor_args': {
-            'youtube': {
-                'po_token': 'web.subs',  # 使用 web.subs PO Token
-            }
-        },
     }
 
 
